@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Alpaca Hackathon — Research Record</title>
+<style>
+  :root{
+    --bg:#0a0a0f; --panel:#10131a; --fg:#e6e6ee; --dim:#8a8a99; --line:#262b36;
+    --cyan:#00E7FD; --green:#00FF7F; --amber:#FFBB00; --red:#FF6B6B; --mag:#FF00FF;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+       font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
+  .wrap{max-width:1180px;margin:0 auto;padding:38px 22px 90px}
+  h1{font-size:30px;margin:0 0 6px;letter-spacing:-.4px}
+  h2{font-size:20px;margin:46px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+  h3{font-size:15px;margin:26px 0 8px;color:var(--cyan);font-family:ui-monospace,monospace}
+  .sub{color:var(--dim);font-size:14px;margin-bottom:26px}
+  .verdict{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--red);
+           border-radius:8px;padding:18px 22px;margin:22px 0}
+  .verdict.good{border-left-color:var(--green)}
+  .verdict.warn{border-left-color:var(--amber)}
+  .k{font-family:ui-monospace,monospace;font-size:13px}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px}
+  th,td{text-align:left;padding:8px 11px;border-bottom:1px solid var(--line)}
+  th{color:var(--dim);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.5px}
+  td.num{font-family:ui-monospace,monospace;text-align:right}
+  .pass{color:var(--green);font-family:ui-monospace,monospace;font-weight:600}
+  .fail{color:var(--red);font-family:ui-monospace,monospace;font-weight:600}
+  .neg{color:var(--red)} .pos{color:var(--green)}
+  figure{margin:22px 0 30px}
+  figure img{width:100%;border:1px solid var(--line);border-radius:8px;display:block;background:#000}
+  figcaption{color:var(--dim);font-size:13px;margin-top:9px}
+  a{color:var(--cyan);text-decoration:none} a:hover{text-decoration:underline}
+  ul{padding-left:20px} li{margin:5px 0}
+  code{background:#171b24;padding:1.5px 6px;border-radius:4px;font-size:12.5px;
+       font-family:ui-monospace,monospace;color:#cfe}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:13px;margin:16px 0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px 16px}
+  .card .big{font-size:25px;font-family:ui-monospace,monospace;margin:5px 0}
+  .card .lbl{color:var(--dim);font-size:11.5px;text-transform:uppercase;letter-spacing:.5px}
+  .tag{display:inline-block;background:#171b24;border:1px solid var(--line);border-radius:20px;
+       padding:2px 11px;font-size:11.5px;color:var(--dim);margin-right:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Alpaca Hackathon — Research Record</h1>
+<div class="sub">
+  Vol-regime options agent · feasibility &amp; falsification · 2026-08-25 ·
+  <span class="tag">SPY + SPX</span><span class="tag">real bid/ask</span>
+  <span class="tag">8.4 years</span><span class="tag">~90 configs examined</span>
+</div>
+
+<div class="verdict">
+  <strong>Verdict — the thesis is dead, and the gate is what killed it.</strong><br><br>
+  Selling defined-risk index option premium, gated by the deployed MSAR + 200d-trend signal,
+  has <strong>no validated edge</strong>. It scores Sharpe <span class="pos">+1.54</span> on the
+  2.6&nbsp;years Alpaca serves and <span class="neg">+0.27</span> over the full 8.4-year record —
+  the short window is not a small sample of the truth, it is the one benign stretch. Run through
+  this fund's own mechanical deploy gate the sleeve comes back
+  <span class="fail">FAIL → DEPLOY BLOCKED</span>.
+</div>
+
+<div class="grid">
+  <div class="card"><div class="lbl">Full-record Sharpe (gated, 8.4y)</div>
+    <div class="big pos">+0.27</div><div class="k" style="color:var(--dim)">t = +0.65</div></div>
+  <div class="card"><div class="lbl">Same book, Alpaca's window</div>
+    <div class="big" style="color:var(--amber)">+1.54</div><div class="k" style="color:var(--dim)">2024–2026 only</div></div>
+  <div class="card"><div class="lbl">Deflated Sharpe (n=90)</div>
+    <div class="big neg">0.042</div><div class="k" style="color:var(--dim)">bar is 0.95</div></div>
+  <div class="card"><div class="lbl">Look-ahead caught</div>
+    <div class="big neg">+1.24→+0.10</div><div class="k" style="color:var(--dim)">kept 8% = leak</div></div>
+</div>
+
+<h2>1 · The integrity gate refuses our own strategy</h2>
+<p>The sleeve was written as a proper <code>IntegrityManifest</code> and run through the same
+nine-checker gate that guards this fund's live capital. It fails on two checkers, and they are
+the right two. Reproduce with
+<code>python3 mandatory_tests_for_deployment/certify.py alpaca_option</code>.</p>
+
+<table>
+  <tr><th>checker</th><th>verdict</th><th>evidence</th></tr>
+  <tr><td class="k">lookahead</td><td class="pass">PASS</td><td>survives +1 bar lag (0.52→0.23, keeps 44%, same sign) — causal</td></tr>
+  <tr><td class="k">survivorship</td><td class="pass">PASS</td><td>cash-settled index only — no constituent selection possible</td></tr>
+  <tr><td class="k">fill_price</td><td class="pass">PASS</td><td>deployed fill is the conservative one: natural −0.27 vs mid +0.53</td></tr>
+  <tr><td class="k">cost_realism</td><td class="pass">PASS</td><td>44bps, calibrated to live Alpaca quotes, real instrument</td></tr>
+  <tr><td class="k">regime</td><td class="fail">FAIL</td><td class="neg">loses money in Fed-Pivot-2018 (−3.09), COVID-2020 (−2.28), Tech-Bear-2022 (−1.12)</td></tr>
+  <tr><td class="k">overfitting</td><td class="fail">FAIL</td><td class="neg">DSR 0.042 &lt; 0.95 at the honest n_configs = 90 ledger</td></tr>
+  <tr><td class="k">shortability</td><td class="pass">PASS</td><td>listed index option — no borrow, no locate, no short-ban exposure</td></tr>
+  <tr><td class="k">liquidity</td><td class="pass">PASS</td><td>$5M book is immaterial to SPXW weekly volume</td></tr>
+  <tr><td class="k">pit_vintage</td><td class="pass">PASS</td><td>point-in-time chain snapshots; quote and settlement share one vintage</td></tr>
+</table>
+
+<figure>
+  <img src="research/gate_verdict.png" alt="Integrity gate verdict">
+  <figcaption>The gate's nine-checker ledger, the 8.4-year equity curve (red = stress windows,
+  green = the entire span of Alpaca's option history), and the two numbers that decided it.</figcaption>
+</figure>
+
+<h2>2 · The look-ahead we caught in our own work</h2>
+<div class="verdict warn">
+  A gated put-spread book showed annualized Sharpe <strong>+1.24</strong>, 96% win rate. The gate
+  was being evaluated at each window's <em>end</em> date rather than at entry — it knew how the
+  window turned out. Corrected: <strong>+0.10</strong>. It retained <strong>8%</strong> of its
+  magnitude, which this fund's <code>causal_retest</code> rule classifies as
+  <em>COLLAPSE — a leak</em>, not a fast-decaying real edge. A +1-day-extra-lag arm confirms the
+  corrected version is clean.
+</div>
+
+<h2>3 · Why the condor fails: the call side, not the crashes</h2>
+<figure>
+  <img src="research/feasibility_probe.png" alt="Feasibility probe">
+  <figcaption>The leak; the side decomposition (the short <em>call</em> is run over by the same
+  +12.6%/yr drift the put side is paid for); per-year causal results; and this test's own biggest
+  flaw — one static credit applied across every VIX regime.
+  Interactive: <a href="research/feasibility_probe.html">feasibility_probe.html</a></figcaption>
+</figure>
+
+<h2>4 · Every structure lands near zero</h2>
+<figure>
+  <img src="research/final_verdict.png" alt="Final verdict">
+  <figcaption>Vol-scaled credits, causal gate. Ungated premium selling prices out at
+  E ≈ +0.007 to +0.027 per share — fairly priced to three decimals. Corrected for overlapping
+  windows (effective n ≈ 144), nothing clears significance.
+  Interactive: <a href="research/final_verdict.html">final_verdict.html</a></figcaption>
+</figure>
+
+<h2>5 · Real Alpaca prices looked good — and the tail explains why</h2>
+<figure>
+  <img src="research/tail_reality_check.png" alt="Tail reality check">
+  <figcaption>On real Alpaca option bars the strike sweep is smooth and monotonic (a real
+  effect, not noise — I first mislabeled it "fragile" and corrected that). But the win rate
+  climbs to 96.9%, concentrating all risk into ~4 loss events. 2022's breach rate is
+  <strong>3.7×</strong> the test window's.</figcaption>
+</figure>
+
+<h2>6 · The bear test — decisive</h2>
+<figure>
+  <img src="research/bear_test_kill.png" alt="Bear test">
+  <figcaption>Our own SPX chains, 2018–2026, real bid/ask, covering all four stress windows.
+  The gate <em>does</em> work as a risk control — it converts a losing book (−4.6 units) to flat
+  (+0.4), cutting COVID damage 62% and 2022 damage 78% by standing down. But it is <strong>late,
+  not early</strong>: the few trades it takes in stress are near-max losses (−0.95, −0.96).</figcaption>
+</figure>
+
+<h2>7 · Horizon matching doesn't rescue it either</h2>
+<figure>
+  <img src="research/premise_test.png" alt="Premise test">
+  <figcaption>36 years of SPX+VIX. The gate predicts forward realized vol beautifully
+  (13.8% vs 22.4% at 3 months, z = −7.9) — but control for VIX and it adds nothing
+  (ΔR² ≈ 0.0001–0.0066). And the VRP <strong>points the wrong way</strong>: premium is richer when
+  the gate is OFF, so the gate steers a vol seller into the cheapest premium available. That one
+  fact explains the entire result.</figcaption>
+</figure>
+
+<h2>8 · What the Alpaca stack can and cannot do</h2>
+<table>
+  <tr><th>capability</th><th>finding</th></tr>
+  <tr><td>paper account</td><td>active, options level 3, multi-leg <code>OrderClass.MLEG</code> native</td></tr>
+  <tr><td>live chain</td><td>13,316 SPY contracts, greeks + IV on 10,736</td></tr>
+  <tr><td>spread cost</td><td class="pos">1–7% of credit — <strong>not</strong> the obstacle, unlike prior single-name work</td></tr>
+  <tr><td>option history</td><td class="neg">starts 2024-01-18 — contains none of the four stress windows</td></tr>
+  <tr><td>historical bid/ask</td><td class="neg">does not exist — bars and trades only</td></tr>
+  <tr><td>VIX</td><td class="neg">not available; MSAR's input must come from FMP/FDR</td></tr>
+  <tr><td>data feed</td><td class="neg"><code>indicative</code> (derived BBO); <code>opra</code> needs the agreement signed</td></tr>
+</table>
+
+<h2>9 · Two mislabels I caught and corrected</h2>
+<ul>
+  <li>Called the strike sweep <em>"fragile"</em> when it was smooth and monotonic — a real effect.</li>
+  <li>Called the gate's stress behaviour uniformly <em>"worse"</em> when it was worse per-trade
+      but <em>better in total</em>, because it takes far fewer trades.</li>
+</ul>
+<p>Both corrections ran against the argument being made at the time. They are recorded because
+fitting the label to the conclusion is the exact failure this whole exercise exists to prevent.</p>
+
+<h2>10 · Files</h2>
+<h3>Write-ups</h3>
+<ul>
+  <li><a href="research/FINDINGS_2026-08-25.md">FINDINGS_2026-08-25.md</a> — capability probe, cost reality, the leak</li>
+  <li><a href="research/PREREGISTRATION_timeframe_sweep.md">PREREGISTRATION_timeframe_sweep.md</a> — hypotheses + pass bar, written before the run</li>
+  <li><a href="research/TIMEFRAME_SWEEP_RESULT.md">TIMEFRAME_SWEEP_RESULT.md</a> — both hypotheses came out wrong</li>
+  <li><a href="research/BEAR_TEST_VERDICT.md">BEAR_TEST_VERDICT.md</a> — the decisive kill</li>
+  <li><a href="research/PREMISE_TEST_VERDICT.md">PREMISE_TEST_VERDICT.md</a> — VRP points the wrong way</li>
+</ul>
+<h3>Certified logic (single source of truth)</h3>
+<ul>
+  <li><code>src/option_premium_signal.py</code> — structure + gate, no I/O</li>
+  <li><code>src/spx_backtest.py</code> — canonical 8.4-year backtest on real quotes</li>
+  <li><code>mandatory_tests_for_deployment/strategies/alpaca_option/strategy_integrity.py</code> — the manifest</li>
+  <li><code>mandatory_tests_for_deployment/tests/test_integrity_alpaca_option.py</code> — 6 tests pinning the honest FAIL</li>
+</ul>
+<h3>Research code</h3>
+<ul>
+  <li><code>src/probes/</code> — 5 scripts: Alpaca capability, history depth, live chain fields, condor cost, profit-take noise diagnostic</li>
+  <li><code>src/backtests/</code> — 13 scripts, numbered in the order they were run. Two are marked
+      <code>_ARTIFACT</code>: they produced results that turned out to be model artifacts and are kept
+      as the record of that.</li>
+  <li><code>src/viz/</code> — 6 plotting scripts</li>
+  <li><code>data/</code> — result CSVs from every run</li>
+</ul>
+
+<p style="color:var(--dim);font-size:12.5px;margin-top:44px;border-top:1px solid var(--line);padding-top:16px">
+Every number here comes from real traded quotes. No mid-price fills, no synthetic option prices in
+any reported P&amp;L, no renegotiated pass bars. The two model-priced runs are labelled as artifacts
+and excluded from every conclusion.
+</p>
+
+</div>
+</body>
+</html>
