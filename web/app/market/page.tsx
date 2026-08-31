@@ -7,7 +7,7 @@ import VixPulse from "@/components/VixPulse";
 import FragilityBadge from "@/components/FragilityBadge";
 import RegimeStack from "@/components/RegimeStack";
 import BacktestPanel from "@/components/BacktestPanel";
-import VolSurface, { type SurfaceData } from "@/components/VolSurface";
+import { type SurfaceData } from "@/components/VolSurface";
 import GammaProfile from "@/components/GammaProfile";
 import { C } from "@/lib/theme";
 import { buildVixTermStructure } from "@/lib/vixTermStructure";
@@ -353,7 +353,7 @@ export default function MarketPage() {
       </section>
 
       {/* ---- HMM vol regime ---- */}
-      <section className="m-2 border border-grid">
+      <section className="m-2 mb-6 border border-grid">
         <div className="px-3 pt-2 text-[10px] uppercase tracking-[0.06em] text-label">
           Vol regime nowcast — 3-state HMM on VIX, filtered (causal), live ·{" "}
           <span style={{ color: C.pos }}>calm ≈12.8</span> ·{" "}
@@ -370,14 +370,9 @@ export default function MarketPage() {
         </div>
         <RegimeStack vixBars={vix} loading={loading} />
       </section>
-
-      {/* ---- S&P volatility surface (caption removed at TC's request 2026-08-31;
-              the VolSurface component's own hottest/calmest strip labels it) ---- */}
-      <section className="m-2 mb-6 border border-grid">
-        <div className="p-2">
-          <VolSurface data={doc?.surface ?? null} />
-        </div>
-      </section>
+      {/* The S&P volatility surface was removed from THIS tab at TC's request
+          (2026-08-31, caption first, then the chart too). It still renders on
+          the Portfolio tab, and market.json keeps shipping `surface` for it. */}
     </main>
   );
 }
