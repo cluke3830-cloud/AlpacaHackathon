@@ -115,6 +115,19 @@ export default function BacktestPage() {
     return t;
   }, [p]);
 
+  // Clamp the y-axis to the 5–95% envelope + ACTUAL, not the autorange. With
+  // 10,000 paths at 4x a handful of runaway spaghetti curves stretch autorange
+  // to several thousand and squash everything informative into a sliver at the
+  // bottom. The envelope already contains 95% of paths pointwise — the extreme
+  // tails simply clip off the top, which is the point of the panel, not a loss.
+  const yRange = useMemo(() => {
+    if (!p?.available || !p.mc) return undefined;
+    const lo = Math.min(...p.mc.bands.p5, ...p.mc.actual);
+    const hi = Math.max(...p.mc.bands.p95, ...p.mc.actual);
+    const pad = (hi - lo) * 0.08;
+    return [Math.max(0, lo - pad), hi + pad] as [number, number];
+  }, [p]);
+
   if (err) {
     return (
       <main className="min-h-screen">
@@ -226,7 +239,8 @@ export default function BacktestPage() {
                 // autotyping once rendered them as epoch dates ("Jan 1256")
                 // after a shared axis object leaked from the date chart below.
                 xaxis: { type: "linear", title: axisTitle("TRADING DAY OF PERIOD") },
-                yaxis: { type: "linear", title: axisTitle("EQUITY (start=100)") } })}
+                yaxis: { type: "linear", range: yRange,
+                         title: axisTitle("EQUITY (start=100)") } })}
               config={CONFIG} style={{ width: "100%" }} />
 
             <div className="mt-1 grid grid-cols-2 gap-px bg-grid p-px md:grid-cols-4">

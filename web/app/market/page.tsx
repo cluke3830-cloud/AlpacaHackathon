@@ -371,16 +371,9 @@ export default function MarketPage() {
         <RegimeStack vixBars={vix} loading={loading} />
       </section>
 
-      {/* ---- S&P volatility surface ---- */}
+      {/* ---- S&P volatility surface (caption removed at TC's request 2026-08-31;
+              the VolSurface component's own hottest/calmest strip labels it) ---- */}
       <section className="m-2 mb-6 border border-grid">
-        <div className="px-3 pt-2 text-[10px] uppercase tracking-[0.06em] text-label">
-          S&amp;P 500 volatility surface — {doc?.surface?.symbols?.length ?? 0} names ×{" "}
-          {doc?.surface?.dates?.length ?? 0} sessions · {doc?.surface?.window ?? 10}d rolling
-          realized vol, annualized
-          <span className="text-dim"> — port of Volatility_Surface.py, widened from a 15-name tech
-          basket to a sector-spread cross-section so the dispersion is visible rather than one
-          correlated ridge</span>
-        </div>
         <div className="p-2">
           <VolSurface data={doc?.surface ?? null} />
         </div>
