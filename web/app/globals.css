@@ -1,0 +1,14 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  background: #050a14;
+  color: #c8d8e8;
+  font-family: "Courier New", monospace;
+}
+
+/* Plotly's default light modebar is unreadable on the dark ground. */
+.js-plotly-plot .modebar { background: transparent !important; }
+.js-plotly-plot .modebar-btn path { fill: #4a7a9b !important; }
+.js-plotly-plot .modebar-btn:hover path { fill: #00ffcc !important; }
