@@ -53,6 +53,48 @@ def main():
     df["gsigned"] = np.where(df["side"].values == "call", dg, -dg)
     prof = df.groupby("strike")["gsigned"].sum().sort_index()
 
+    # GAMMA FLIP (zero-gamma level): the SPOT at which total dealer gamma
+    # changes sign. Above it dealers are net long gamma (they sell rallies and
+    # buy dips = pinning); below it net short (they chase = amplifying).
+    #
+    # This is computed by RE-EVALUATING every contract's gamma at a range of
+    # hypothetical spot levels and finding where the aggregate crosses zero --
+    # not by walking the cumulative sum across strikes, which was the first
+    # attempt here and is a different quantity entirely (it returned None
+    # because the cumulative curve never changes sign when dealers are net
+    # short across the whole window). IV is held fixed per contract; a full
+    # re-solve of the smile at each hypothetical spot is not worth the
+    # complexity for a level that moves in whole strikes.
+    flip = None
+    S_grid = np.linspace(S * 0.90, S * 1.10, 81)
+    totals = []
+    for S_t in S_grid:
+        d1_t = (np.log(S_t / K) + (R - Q + 0.5 * iv ** 2) * T) / (iv * np.sqrt(T))
+        g_t = np.exp(-Q * T) * norm.pdf(d1_t) / (S_t * iv * np.sqrt(T))
+        dg_t = g_t * df["oi"].values * S_t ** 2 * 0.01
+        totals.append(float(np.sum(np.where(df["side"].values == "call", dg_t, -dg_t))))
+    totals = np.array(totals)
+    cross = []
+    for i in range(1, len(totals)):
+        if (totals[i - 1] < 0) != (totals[i] < 0) and totals[i] != totals[i - 1]:
+            w = abs(totals[i - 1]) / (abs(totals[i - 1]) + abs(totals[i]))
+            cross.append(float(S_grid[i - 1] + w * (S_grid[i] - S_grid[i - 1])))
+    if cross:
+        flip = min(cross, key=lambda k: abs(k - S))   # the crossing nearest spot
+
+    # EXPECTED MOVE: ATM straddle mid on the nearest expiry -- the market's own
+    # 1-sigma price for the period, used for the +/-1 sigma band. Taken from
+    # real quotes rather than an IV formula so it matches what is tradeable.
+    exp_move = None
+    near = df[df["dte"] == df["dte"].min()]
+    if len(near):
+        atm_k = float(near.iloc[(near["strike"] - S).abs().argsort().iloc[0]]["strike"])
+        leg = near[near["strike"] == atm_k]
+        c = leg[leg["side"] == "call"]["mid"]
+        p_ = leg[leg["side"] == "put"]["mid"]
+        if len(c) and len(p_):
+            exp_move = float(c.iloc[0]) + float(p_.iloc[0])
+
     doc = dict(
         generated=dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
         underlying=C.UNDERLYING,
@@ -72,6 +114,8 @@ def main():
         gate=bool(sig["gate"]),
         sleeve1=("LONG CALL" if sig["gate"] else "FLAT"),
         sleeve2=("LONG CALL" if sig["ac_dir"] > 0 else "LONG PUT" if sig["ac_dir"] < 0 else "FLAT"),
+        gamma_flip=flip,
+        expected_move=exp_move,
         gamma_profile=[dict(strike=float(k), gex=float(v)) for k, v in prof.items()],
     )
     OUT.parent.mkdir(parents=True, exist_ok=True)

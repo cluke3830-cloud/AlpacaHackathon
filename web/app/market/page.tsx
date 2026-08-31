@@ -8,8 +8,7 @@ import FragilityBadge from "@/components/FragilityBadge";
 import RegimeStack from "@/components/RegimeStack";
 import BacktestPanel from "@/components/BacktestPanel";
 import VolSurface, { type SurfaceData } from "@/components/VolSurface";
-import Plot from "@/components/Plot";
-import { LAYOUT, CONFIG } from "@/lib/plotTheme";
+import GammaProfile from "@/components/GammaProfile";
 import { C } from "@/lib/theme";
 import { buildVixTermStructure } from "@/lib/vixTermStructure";
 import { regimeProbs, currentRegime } from "@/lib/hmmRegime";
@@ -60,6 +59,8 @@ type Signal = {
   oi_date: string; n_contracts: number; cross_check: boolean;
   msar_long: boolean; p_high: number; p_slow: number; vol_era_threshold: number;
   trend_ok: number; ac_dir: number; gate: boolean; sleeve1: string; sleeve2: string;
+  gamma_flip: number | null;
+  expected_move: number | null;
   gamma_profile: { strike: number; gex: number }[];
 };
 
@@ -163,17 +164,6 @@ export default function MarketPage() {
   }, [fragility, latestVix, spy]);
 
   const strongDays = useMemo(() => Array.from(new Set(HISTORICAL_STRONG_FIRE_DAYS)), []);
-
-  const gammaTrace = useMemo(() => {
-    if (!sig?.gamma_profile?.length) return null;
-    const p = sig.gamma_profile;
-    return [{
-      x: p.map((g) => g.gex / 1e9), y: p.map((g) => g.strike),
-      type: "bar", orientation: "h", name: "GEX",
-      marker: { color: p.map((g) => (g.gex >= 0 ? C.pos : C.neg)) },
-      hovertemplate: "%{y} · %{x:.3f} $bn<extra></extra>",
-    }];
-  }, [sig]);
 
   return (
     <main className="min-h-screen bg-bg">
@@ -302,24 +292,16 @@ export default function MarketPage() {
           Dealer gamma profile — per strike, from Alpaca open interest ·{" "}
           <span style={{ color: C.pos }}>green = long γ (pinning)</span> ·{" "}
           <span style={{ color: C.neg }}>red = short γ (amplifying)</span>
-          <span className="text-dim"> — gold dashed line = spot. This is the surface sleeve 2
-          reads its direction from</span>
+          <span className="text-dim"> — cyan dashed = spot · gold = γ-flip (the level where dealer
+          gamma changes sign) · shaded = ±1σ expected move · ◆ = dealer clusters. This is the
+          surface sleeve 2 reads its direction from</span>
         </div>
-        {gammaTrace ? (
-          <Plot data={gammaTrace}
-            layout={{ ...LAYOUT, height: 340, showlegend: false,
-              margin: { l: 58, r: 16, t: 10, b: 34 },
-              xaxis: { ...LAYOUT.xaxis, title: { text: "$bn", font: { size: 9, color: C.label } } },
-              yaxis: { ...LAYOUT.yaxis, title: { text: "STRIKE", font: { size: 9, color: C.label } } },
-              shapes: sig ? [{ type: "line", xref: "paper", x0: 0, x1: 1,
-                               y0: sig.spot, y1: sig.spot,
-                               line: { color: C.gold, width: 1, dash: "dot" } }] : [] }}
-            config={CONFIG} style={{ width: "100%" }} />
-        ) : (
-          <div className="flex h-[340px] items-center justify-center text-xs text-label">
-            no signal.json — run <code className="ml-1 text-body">export_signal_json.py</code>
-          </div>
-        )}
+        <GammaProfile chain={sig ? {
+          spot: sig.spot,
+          expected_move: sig.expected_move,
+          gamma_flip: sig.gamma_flip,
+          gex_profile: sig.gamma_profile,
+        } : null} />
       </section>
 
       {/* ---- VIX term structure ---- */}
