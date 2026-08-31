@@ -174,6 +174,44 @@ def build_surface() -> dict:
     )
 
 
+def build_option_timing() -> dict:
+    """OUR AGENT's historical trading timing, for the SPY chart's marker rows.
+
+    Same construction the audit stack validated (SPX dealer gamma at gex_lag=1,
+    the shipping-honest config), reusing gex_source_check.signals_from_gex
+    rather than re-deriving the gate here -- a hand-rolled copy is exactly how a
+    chart ends up showing a signal the agent doesn't actually trade.
+
+      calls_on  / calls_off : sleeve-1 T2 gate opens (buy deep-ITM calls) / closes
+      puts_on   / puts_off  : sleeve-2 A+C direction enters / leaves bearish
+
+    Coverage note carried into the JSON: the chain history ends 2026-06-12, so
+    markers stop there. The LIVE read continues in the signal strip above the
+    chart (signal.json, recomputed from Alpaca each run) -- stated in the UI
+    caption rather than letting the marker gap look like the agent went quiet."""
+    sys.path.insert(0, str(HERE.parents[1] / "Researched_Concepts" / "CrossSectionalArb" / "src"))
+    from gex_source_check import gex_from, signals_from_gex, GEX_DATA
+
+    g = pd.concat([gex_from(GEX_DATA / "chains_SPX_pre2022.parquet"),
+                   gex_from(GEX_DATA / "chains_SPX.parquet")]).groupby(level=0).sum()
+    sig = signals_from_gex(g, "SPX", 1)
+    gate, ac = sig["gate"], sig["ac_dir"]
+
+    day = lambda ix: [d.strftime("%Y-%m-%d") for d in ix]
+    timing = dict(
+        calls_on=day(gate[gate.diff() == 1].index),
+        calls_off=day(gate[gate.diff() == -1].index),
+        puts_on=day(ac[(ac == -1) & (ac.shift() != -1)].index),
+        puts_off=day(ac[(ac != -1) & (ac.shift() == -1)].index),
+        coverage_start=str(sig.index.min().date()),
+        coverage_end=str(sig.index.max().date()),
+        config="SPX dealer-gamma, gex_lag=1 (shipping-honest), T2 gate + A+C",
+    )
+    print(f"  option timing: {len(timing['calls_on'])} call entries, "
+          f"{len(timing['puts_on'])} put entries, through {timing['coverage_end']}")
+    return timing
+
+
 def main():
     print("=== VIX family (FinanceDataReader) ===")
     vix = fetch_vix()
@@ -181,6 +219,8 @@ def main():
     spy = fetch_spy_daily()
     print("=== S&P volatility surface (Alpaca) ===")
     surface = build_surface()
+    print("=== option trading timing (our agent, historical) ===")
+    timing = build_option_timing()
 
     # `t` is EPOCH SECONDS, not an ISO string. The market tab's components are
     # copied verbatim from OptionDashboard, whose Bar type is {t:number,...} and
@@ -201,6 +241,7 @@ def main():
              for d, r in spy.iterrows()],
         vix=ser(vix["VIX"]), vix3m=ser(vix["VIX3M"]), vix9d=ser(vix["VIX9D"]),
         surface=surface,
+        option_timing=timing,
         sources=dict(
             spy="Alpaca IEX daily",
             vix="CBOE public daily archive — not available on Alpaca",

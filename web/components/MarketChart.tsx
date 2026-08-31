@@ -6,7 +6,7 @@ import { isoDay, monthlyTicks } from "@/lib/dateAxis";
 import { buildRiskOnsets, type RiskOnset } from "@/lib/riskOnsets";
 import { toHeikinAshi, type Bar } from "@/lib/heikinashi";
 
-export default function MarketChart({ bars, vixByDay, highVix = 25, riskDays, fireDays, strongDays, buyDays, sellDays, msarBuyDays, msarSellDays, loading }: {
+export default function MarketChart({ bars, vixByDay, highVix = 25, riskDays, fireDays, strongDays, buyDays, sellDays, msarBuyDays, msarSellDays, optCallOnDays, optCallOffDays, optPutOnDays, optPutOffDays, loading }: {
   bars: Bar[];
   vixByDay?: Record<string, number>;   // isoDay -> VIX close, for high-VIX shading
   highVix?: number;                    // stress shading threshold (default 25)
@@ -17,6 +17,10 @@ export default function MarketChart({ bars, vixByDay, highVix = 25, riskDays, fi
   sellDays?: string[];                 // SMA timing DE-RISK days (▼ red, below bar)
   msarBuyDays?: string[];              // MSAR timing RE-ENTER days (▲ cyan, below bar)
   msarSellDays?: string[];             // MSAR timing DE-RISK days (▼ orange, below bar)
+  optCallOnDays?: string[];            // OUR AGENT: T2 gate opens -> buy calls (▲ gold)
+  optCallOffDays?: string[];           // OUR AGENT: gate closes -> exit calls (▼ violet)
+  optPutOnDays?: string[];             // OUR AGENT: A+C flips bearish -> buy puts (▼ magenta)
+  optPutOffDays?: string[];            // OUR AGENT: put leg exits (▲ magenta)
   loading?: boolean;
 }) {
   const fig = useMemo(() => {
@@ -140,6 +144,11 @@ export default function MarketChart({ bars, vixByDay, highVix = 25, riskDays, fi
     const addTimingMarkers = (
       buys: string[] | undefined, sells: string[] | undefined,
       buyColor: string, sellColor: string, label: string, yShift: number,
+      // Descriptions are parameters because the option rows reuse this helper
+      // with INVERTED semantics: entering a PUT is bearish, so it renders as ▼
+      // via the `sells` slot — and the hardcoded "de-risk to flat" wording
+      // would then lie about what the marker means.
+      buyDesc = "BUY — re-enter long", sellDesc = "SELL — de-risk to flat",
     ) => {
       if (!(buys && buys.length) && !(sells && sells.length)) return;
       const buySet = new Set(buys ?? []);
@@ -149,11 +158,11 @@ export default function MarketChart({ bars, vixByDay, highVix = 25, riskDays, fi
       for (let i = 0; i < x.length; i++) {
         if (sellSet.has(x[i])) {
           sellX.push(x[i]); sellY.push(ha[i].l * yShift);
-          sellT.push(`${x[i]}: ${label} SELL — de-risk to flat`);
+          sellT.push(`${x[i]}: ${label} ${sellDesc}`);
         }
         if (buySet.has(x[i])) {
           buyX.push(x[i]); buyY.push(ha[i].l * yShift);
-          buyT.push(`${x[i]}: ${label} BUY — re-enter long`);
+          buyT.push(`${x[i]}: ${label} ${buyDesc}`);
         }
       }
       if (sellX.length) traces.push({
@@ -173,6 +182,16 @@ export default function MarketChart({ bars, vixByDay, highVix = 25, riskDays, fi
     };
     addTimingMarkers(buyDays, sellDays, C.pos, C.neg, "SMA", 1.0);
     addTimingMarkers(msarBuyDays, msarSellDays, C.cyan, "#FF9500", "MSAR", 0.985);
+    // OUR AGENT's actual trading timing — what the two-sleeve options book did:
+    //   calls row: gate opens = ▲ gold buy deep-ITM calls; closes = ▼ violet flat
+    //   puts row:  A+C flips bearish = ▼ magenta BUY PUTS (bearish, so down-
+    //              triangle via the sells slot); exit = ▲ magenta
+    addTimingMarkers(optCallOnDays, optCallOffDays, C.gold, "#BB86FC", "OPT·CALLS", 0.97,
+      "CALLS ON — T2 gate opens, buy deep-ITM calls",
+      "CALLS OFF — gate closes, exit to flat");
+    addTimingMarkers(optPutOffDays, optPutOnDays, C.magenta, C.magenta, "OPT·PUTS", 0.955,
+      "PUTS OFF — A+C leaves bearish, exit puts",
+      "PUTS ON — A+C flips bearish, buy puts");
 
     const ticks = monthlyTicks(bars.map((b) => b.t));
     const layout = baseLayout({
@@ -187,7 +206,8 @@ export default function MarketChart({ bars, vixByDay, highVix = 25, riskDays, fi
     });
     return { data: traces, layout };
   }, [bars, vixByDay, highVix, riskDays, fireDays, strongDays,
-      buyDays, sellDays, msarBuyDays, msarSellDays]);
+      buyDays, sellDays, msarBuyDays, msarSellDays,
+      optCallOnDays, optCallOffDays, optPutOnDays, optPutOffDays]);
 
   if (!fig) {
     return (

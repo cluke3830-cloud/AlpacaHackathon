@@ -68,6 +68,11 @@ type MarketDoc = {
   generated: string;
   spy: Bar[]; vix: Bar[]; vix3m: Bar[]; vix9d: Bar[];
   surface: SurfaceData;
+  option_timing?: {
+    calls_on: string[]; calls_off: string[];
+    puts_on: string[]; puts_off: string[];
+    coverage_start: string; coverage_end: string; config: string;
+  };
   sources: Record<string, string>;
 };
 
@@ -91,6 +96,7 @@ export default function MarketPage() {
   const [showDots, setShowDots] = useState(true);
   const [showTiming, setShowTiming] = useState(true);
   const [showMsar, setShowMsar] = useState(true);
+  const [showOpt, setShowOpt] = useState(true);   // OUR AGENT's option timing
   const [doc, setDoc] = useState<MarketDoc | null>(null);
   const [sig, setSig] = useState<Signal | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -253,12 +259,28 @@ export default function MarketPage() {
           )}
           <span className="text-dim"> — drawdown-defense overlays, not oracles.</span>
         </div>
+        <div className="px-3 pb-1 text-[10px] uppercase tracking-[0.06em] text-label">
+          Option trading timing — what OUR AGENT did (two-sleeve book, backtested):
+          {" "}<span style={{ color: C.gold }}>▲ calls on</span>
+          {" · "}<span style={{ color: "#BB86FC" }}>▼ calls off</span>
+          {" · "}<span style={{ color: C.magenta }}>▼ puts on / ▲ puts off</span>
+          {sig && (
+            <span className="font-bold" style={{ color: sig.gate ? C.gold : "#BB86FC" }}>
+              {" "}· NOW: {sig.sleeve1}{sig.ac_dir < 0 ? " + PUTS" : ""}
+            </span>
+          )}
+          {doc?.option_timing && (
+            <span className="text-dim"> — markers through {doc.option_timing.coverage_end}
+            {" "}(chain-history end); the live read continues in the strip above</span>
+          )}
+        </div>
         <div className="flex flex-wrap items-center gap-1.5 px-3 py-1.5">
           <span className="mr-0.5 text-[9px] uppercase tracking-[0.08em] text-dim">show</span>
           <ToggleChip label="Stress bands" on={showBands} onToggle={() => setShowBands((v) => !v)} color="#FFB000" />
           <ToggleChip label="Crisis dots" on={showDots} onToggle={() => setShowDots((v) => !v)} color={C.neg} />
           <ToggleChip label="SMA timing" on={showTiming} onToggle={() => setShowTiming((v) => !v)} color={C.pos} />
           <ToggleChip label="MSAR timing" on={showMsar} onToggle={() => setShowMsar((v) => !v)} color="#FF9500" />
+          <ToggleChip label="Option timing (ours)" on={showOpt} onToggle={() => setShowOpt((v) => !v)} color={C.gold} />
         </div>
         <MarketChart bars={spy}
           vixByDay={showBands ? vixByDay : undefined}
@@ -269,6 +291,10 @@ export default function MarketPage() {
           sellDays={showTiming ? meanRev.sellDays : undefined}
           msarBuyDays={showMsar ? msar.buyDays : undefined}
           msarSellDays={showMsar ? msar.sellDays : undefined}
+          optCallOnDays={showOpt ? doc?.option_timing?.calls_on : undefined}
+          optCallOffDays={showOpt ? doc?.option_timing?.calls_off : undefined}
+          optPutOnDays={showOpt ? doc?.option_timing?.puts_on : undefined}
+          optPutOffDays={showOpt ? doc?.option_timing?.puts_off : undefined}
           loading={loading} />
       </section>
 

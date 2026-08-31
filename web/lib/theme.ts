@@ -14,6 +14,7 @@ export const C = {
   zero: "#1A3A55",
   label: "#4A7A9B",
   dim: "#555555",
+  magenta: "#FF00FF",   // MC median / our option-timing put markers
   palette: ["#FF2D55", "#FF6B35", "#FFD700", "#00FF99", "#00CCFF",
             "#7B68EE", "#BB86FC", "#FF69B4", "#4ECDC4", "#96CEB4"],
 } as const;
