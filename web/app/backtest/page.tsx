@@ -153,7 +153,9 @@ export default function BacktestPage() {
       {/* ---- lookback selector ---- */}
       <div className="flex flex-wrap items-center gap-3 border-b border-headerline
         bg-gradient-to-r from-[#0A1628] to-[#051020] px-4 py-2">
-        <span className="text-[10px] uppercase tracking-[0.06em] text-label">Backtest period</span>
+        <span className="text-[10px] uppercase tracking-[0.06em] text-label">
+          Backtest period <span className="text-dim">— click to switch</span>
+        </span>
         <nav className="flex gap-1">
           {bt.period_order.map((k) => {
             const avail = bt.periods[k]?.available;
@@ -162,10 +164,16 @@ export default function BacktestPage() {
                 onClick={() => avail && setPeriod(k)}
                 disabled={!avail}
                 title={avail ? undefined : bt.periods[k]?.reason}
-                className={`px-2.5 py-0.5 text-xs border transition-colors ${
-                  k === period ? "border-cyan text-cyan"
-                  : avail ? "border-grid text-label hover:border-label"
-                  : "border-grid/40 text-dim cursor-not-allowed line-through"}`}>
+                className={`px-3 py-1 text-xs border transition-colors ${
+                  k === period
+                    ? "border-cyan bg-cyan/10 text-cyan font-bold"
+                    : avail
+                      // Selectable periods read as BRIGHT and clickable. They were
+                      // previously dim grey next to the active cyan, which — with a
+                      // struck-through 10Y sitting beside them — made the whole row
+                      // look locked rather than like a live selector.
+                      ? "border-label/70 text-body cursor-pointer hover:border-cyan hover:text-cyan hover:bg-cyan/5"
+                      : "border-grid/40 text-dim cursor-not-allowed line-through opacity-50"}`}>
                 {k}
               </button>
             );
