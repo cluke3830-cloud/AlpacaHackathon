@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from "react";
 import TabNav from "@/components/TabNav";
 import Plot from "@/components/Plot";
-import { LAYOUT, CONFIG, C } from "@/lib/plotTheme";
+import { layout, axisTitle, CONFIG, C } from "@/lib/plotTheme";
 
 /**
  * BACKTESTED tab — same three-row format as Partner_Strategy_2_Backtesting.py:
@@ -221,9 +221,12 @@ export default function BacktestPage() {
               </span>
             </div>
             <Plot data={mcTraces}
-              layout={{ ...LAYOUT, height: 400,
-                yaxis: { ...LAYOUT.yaxis, title: { text: "EQUITY (start=100)", font: { size: 9, color: C.label } } },
-                xaxis: { ...LAYOUT.xaxis, title: { text: "TRADING DAY OF PERIOD", font: { size: 9, color: C.label } } } }}
+              layout={layout({ height: 400,
+                // type is EXPLICIT: these are day counts, and Plotly's
+                // autotyping once rendered them as epoch dates ("Jan 1256")
+                // after a shared axis object leaked from the date chart below.
+                xaxis: { type: "linear", title: axisTitle("TRADING DAY OF PERIOD") },
+                yaxis: { type: "linear", title: axisTitle("EQUITY (start=100)") } })}
               config={CONFIG} style={{ width: "100%" }} />
 
             <div className="mt-1 grid grid-cols-2 gap-px bg-grid p-px md:grid-cols-4">
@@ -279,7 +282,8 @@ export default function BacktestPage() {
                 data={[{ x: p.historical!.times, y: p.historical!.equity,
                          type: "scatter", mode: "lines", name: "Actual history",
                          line: { color: C.gold, width: 2 } }]}
-                layout={{ ...LAYOUT, height: 260, showlegend: false }}
+                layout={layout({ height: 260, showlegend: false,
+                  xaxis: { type: "date" }, yaxis: { type: "linear" } })}
                 config={CONFIG} style={{ width: "100%" }} />
             </section>
 
@@ -291,14 +295,15 @@ export default function BacktestPage() {
               <Plot
                 data={[{ x: p.mc!.returns, type: "histogram", nbinsx: 50,
                          marker: { color: "#9a31ad" }, opacity: 0.75, name: "Return %" }]}
-                layout={{ ...LAYOUT, height: 260, showlegend: false,
-                  xaxis: { ...LAYOUT.xaxis, title: { text: `${period} RETURN %`, font: { size: 9, color: C.label } } },
+                layout={layout({ height: 260, showlegend: false,
+                  xaxis: { type: "linear", title: axisTitle(`${period} RETURN %`) },
+                  yaxis: { type: "linear" },
                   shapes: [{ type: "line", yref: "paper", y0: 0, y1: 1,
                              x0: p.mc!.actual_terminal, x1: p.mc!.actual_terminal,
                              line: { color: C.gold, width: 2 } }],
                   annotations: [{ x: p.mc!.actual_terminal, yref: "paper", y: 1.04,
                                   text: "ACTUAL", showarrow: false,
-                                  font: { size: 9, color: C.gold } }] }}
+                                  font: { size: 9, color: C.gold } }] })}
                 config={CONFIG} style={{ width: "100%" }} />
             </section>
           </div>

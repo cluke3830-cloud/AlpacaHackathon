@@ -1,7 +1,7 @@
 "use client";
 import { useMemo } from "react";
 import Plot from "./Plot";
-import { LAYOUT, CONFIG, C } from "@/lib/plotTheme";
+import { layout, axisTitle, CONFIG, C } from "@/lib/plotTheme";
 import { rebase } from "@/lib/stats";
 
 export type ChartKind = "line" | "area";
@@ -56,10 +56,11 @@ export default function EquityVsSpy({
   return (
     <Plot
       data={traces}
-      layout={{
-        ...LAYOUT, height,
-        yaxis: { ...LAYOUT.yaxis, title: { text: "INDEXED = 100", font: { size: 9, color: C.label } } },
-      }}
+      layout={layout({
+        height,
+        xaxis: { type: "date" },
+        yaxis: { type: "linear", title: axisTitle("INDEXED = 100") },
+      })}
       config={CONFIG}
       style={{ width: "100%" }}
     />
