@@ -10,9 +10,15 @@ So Python computes, JSON carries, the browser only draws.
 
 Output format mirrors Partner_Strategy_2_Backtesting.py: MC spaghetti + median,
 historical equity, return distribution, a P5/P50/P95 percentile table, and
-Risk-of-Ruin probabilities -- now emitted PER LOOKBACK PERIOD (1Y default, plus
-3Y / 5Y / 10Y) so the tab can show how the same strategy's forward distribution
-changes with how much history the bootstrap is allowed to draw from.
+Risk-of-Ruin probabilities -- emitted PER LOOKBACK PERIOD (1Y default, plus
+3Y / 5Y / 10Y).
+
+The Monte Carlo is COUNTERFACTUAL, not a forward projection: each of the 10,000
+paths is an alternative history of the SAME length as the selected period,
+block-resampled from that period's own returns, with the actual realized curve
+overlaid. The question it answers is "was the backtest a typical outcome of
+this process, or a lucky draw?" -- which is what you want from a backtest, and
+is answered by the percentile rank of the real path inside the simulated cloud.
 
 INSTRUMENT: SPX, not the deployed SPY. Two reasons, and the tradeoff is stated
 in the UI rather than hidden: (1) SPX chain history runs 2018-2026 (8.4y) vs
@@ -46,8 +52,9 @@ sys.path.insert(0, str(ROOT / "AlpacaHackathon" / "agent"))
 OUT = HERE.parent / "web" / "public" / "backtest.json"
 
 INSTRUMENT = "SPX"
-N_PATHS, HORIZON, BLOCK = 2000, 252, 21
-SPAGHETTI = 150          # curves actually shipped to the browser, per period
+N_PATHS, BLOCK = 10_000, 21
+SPAGHETTI = 200          # sample paths shipped for spaghetti texture, per period
+MAX_POINTS = 400         # x-resolution cap for shipped curves (file-size guard)
 RISK_LEVELS = [10, 20, 25, 50]
 PERIODS = {"1Y": 252, "3Y": 756, "5Y": 1260, "10Y": 2520}
 DEFAULT_PERIOD = "1Y"
@@ -55,37 +62,70 @@ RNG = np.random.default_rng(20260831)
 
 
 def mc_for(r: pd.Series) -> dict:
-    """Block-bootstrap Monte Carlo on one return slice.
+    """COUNTERFACTUAL Monte Carlo: what could this same period have looked like?
 
-    Block (not iid) resampling because an option position is held across days:
-    iid draws would destroy the autocorrelation and the skew, and manufacture a
-    tighter, friendlier distribution than the strategy actually has."""
+    This is NOT a forward projection. The horizon is the LENGTH OF THE PERIOD
+    ITSELF, and every simulated path is an alternative history of exactly that
+    span, block-resampled from the period's own realized returns. The actual
+    realized equity curve is shipped alongside so the reader can see where
+    reality landed among the alternatives -- which is the whole question: was
+    the backtest's outcome typical of this process, or a lucky draw?
+
+    Block (not iid) resampling because an option position is held across days.
+    iid draws would destroy the autocorrelation and the skew and manufacture a
+    tighter, friendlier distribution than the strategy actually has.
+
+    Percentile bands are computed over ALL N_PATHS; only a sample of individual
+    curves is shipped, purely for visual texture.
+    """
     v = r.values
     N = len(v)
-    nb = int(np.ceil(HORIZON / BLOCK))
+    horizon = N                      # an alternative history of the SAME length
+    nb = int(np.ceil(horizon / BLOCK))
     starts = RNG.integers(0, max(N - BLOCK, 1), size=(N_PATHS, nb))
-    idx = (starts[:, :, None] + np.arange(BLOCK)[None, None, :]).reshape(N_PATHS, -1)[:, :HORIZON]
+    idx = (starts[:, :, None] + np.arange(BLOCK)[None, None, :]).reshape(N_PATHS, -1)[:, :horizon]
     idx = np.clip(idx, 0, N - 1)
     paths = v[idx]
 
     curves = np.cumprod(1 + paths, axis=1) * 100.0
+    actual = np.cumprod(1 + v) * 100.0
+
     terminal = (curves[:, -1] / 100.0 - 1.0) * 100.0
+    actual_terminal = float((actual[-1] / 100.0 - 1.0) * 100.0)
     dd = (curves / np.maximum.accumulate(curves, axis=1) - 1).min(axis=1) * -100.0
+    actual_dd = float(-(actual / np.maximum.accumulate(actual) - 1).min() * 100.0)
     final_eq = curves[:, -1]
-    median = np.median(curves, axis=0)
+
+    # Where did reality land? The percentile rank of the ACTUAL outcome inside
+    # the simulated distribution -- the single most useful number on the panel.
+    rank_ret = float((terminal < actual_terminal).mean() * 100)
+    rank_dd = float((dd < actual_dd).mean() * 100)
+
+    # Downsample the x-axis for shipped series only (stats above use full res).
+    step = max(1, int(np.ceil(horizon / MAX_POINTS)))
+    sl = slice(None, None, step)
+
+    band = lambda q: [round(float(x), 2) for x in np.percentile(curves, q, axis=0)[sl]]
 
     pct = lambda a, q: float(np.percentile(a, q))
     return dict(
-        curves=[[round(float(x), 2) for x in c] for c in curves[:SPAGHETTI]],
-        median=[round(float(x), 3) for x in median],
+        horizon=horizon,
+        step=step,
+        curves=[[round(float(x), 2) for x in c[sl]] for c in curves[:SPAGHETTI]],
+        bands=dict(p5=band(5), p25=band(25), p50=band(50), p75=band(75), p95=band(95)),
+        actual=[round(float(x), 2) for x in actual[sl]],
+        actual_terminal=round(actual_terminal, 3),
+        actual_maxdd=round(actual_dd, 3),
+        rank_return=round(rank_ret, 1),
+        rank_maxdd=round(rank_dd, 1),
         returns=[round(float(x), 3) for x in terminal],
         percentiles=[
             dict(metric="Final Equity", p5=pct(final_eq, 5), p50=pct(final_eq, 50),
-                 p95=pct(final_eq, 95), fmt="usd"),
+                 p95=pct(final_eq, 95), actual=round(float(actual[-1]), 2), fmt="usd"),
             dict(metric="Total Return", p5=pct(terminal, 5), p50=pct(terminal, 50),
-                 p95=pct(terminal, 95), fmt="pct"),
+                 p95=pct(terminal, 95), actual=round(actual_terminal, 2), fmt="pct"),
             dict(metric="Max Drawdown", p5=pct(dd, 5), p50=pct(dd, 50),
-                 p95=pct(dd, 95), fmt="pct"),
+                 p95=pct(dd, 95), actual=round(actual_dd, 2), fmt="pct"),
         ],
         risk_of_ruin=[dict(level=L, prob=float((dd >= L).mean() * 100)) for L in RISK_LEVELS],
         p_loss=float((terminal < 0).mean() * 100),
@@ -129,7 +169,10 @@ def main():
                 times=[d.strftime("%Y-%m-%d") for d in eq.index],
                 equity=[round(float(x) * 100, 4) for x in eq],
             ),
-            mc=dict(curves=m["curves"], median=m["median"], returns=m["returns"]),
+            mc=dict(curves=m["curves"], bands=m["bands"], actual=m["actual"],
+                    returns=m["returns"], horizon=m["horizon"], step=m["step"],
+                    actual_terminal=m["actual_terminal"], actual_maxdd=m["actual_maxdd"],
+                    rank_return=m["rank_return"], rank_maxdd=m["rank_maxdd"]),
             percentiles=m["percentiles"],
             risk_of_ruin=m["risk_of_ruin"],
             p_loss=m["p_loss"],
@@ -138,7 +181,8 @@ def main():
         )
         print(f"  {label:>4}: {len(r)}d  Sharpe {st['sharpe']:+.2f}  "
               f"CAGR {100*st['cagr']:+.1f}%  maxDD {100*st['maxdd']:.1f}%  "
-              f"| MC terminal P50 {m['percentiles'][1]['p50']:+.1f}%")
+              f"| MC P50 {m['percentiles'][1]['p50']:+.1f}% vs ACTUAL "
+              f"{m['actual_terminal']:+.1f}% (rank {m['rank_return']:.0f}th pct)")
 
     audit = [
         dict(label="Walk-forward OOS Sharpe", value="+0.93", ok=True),
@@ -163,7 +207,7 @@ def main():
             full_start=str(r_full.index.min().date()),
             full_end=str(r_full.index.max().date()),
             full_days=len(r_full),
-            n_paths=N_PATHS, horizon=HORIZON, block=BLOCK,
+            n_paths=N_PATHS, block=BLOCK,
             generated=dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
         ),
         default_period=DEFAULT_PERIOD,
