@@ -26,13 +26,14 @@ export const LAYOUT = {
 
 export const CONFIG = { displayModeBar: false, responsive: true };
 
+// Canonical palette lives in lib/theme.ts (carried from OptionDashboard, whose
+// own header says "Do not improvise colors"). Re-exported here with the two
+// sketch-specific roles added, so there is ONE source of truth for hues.
+import { C as BASE } from "./theme";
+
 export const C = {
-  ours: "#FF4444",     // sketch: red = ours
-  spy: "#3B9EFF",      // sketch: blue = SPY
-  cyan: "#00FFCC",
-  gold: "#FFD700",
-  pos: "#00FF99",
-  neg: "#FF4444",
+  ...BASE,
+  ours: "#FF4444",     // sketch: red = our book
+  spy: "#3B9EFF",      // sketch: blue = benchmark
   magenta: "#FF00FF",
-  label: "#4A7A9B",
 };

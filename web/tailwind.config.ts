@@ -19,6 +19,14 @@ const config: Config = {
         label: "#4A7A9B",
         magenta: "#FF00FF",
         panel: "#0A1220",
+        dim: "#555555",
+        grid3d: "#1A2A3A",
+        red2: "#FF6B6B",
+        zero: "#1A3A55",
+        amber: "#FFB000",
+        orange: "#FF9500",
+        ours: "#FF4444",     // sketch: red = our book
+        spy: "#3B9EFF",      // sketch: blue = benchmark
       },
       fontFamily: { mono: ["Courier New", "monospace"] },
     },

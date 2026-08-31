@@ -5,7 +5,7 @@ import EquityVsSpy, { type ChartKind } from "@/components/EquityVsSpy";
 import StatsPanel from "@/components/StatsPanel";
 import AllocationPie from "@/components/AllocationPie";
 import TradeLog from "@/components/TradeLog";
-import VolGraph from "@/components/VolGraph";
+import VolSurface, { type SurfaceData } from "@/components/VolSurface";
 import { computeStats } from "@/lib/stats";
 import type { Account, Position, Order, PortfolioHistory, Bar } from "@/lib/alpaca";
 
@@ -36,15 +36,17 @@ export default function PortfolioPage() {
   const [hist, setHist] = useState<PortfolioHistory | null>(null);
   const [trades, setTrades] = useState<Order[]>([]);
   const [spy, setSpy] = useState<Bar[]>([]);
+  const [surface, setSurface] = useState<SurfaceData | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     try {
-      const [p, t, b] = await Promise.all([
+      const [p, t, b, m] = await Promise.all([
         fetch(`/api/portfolio?period=${period}`).then((r) => r.json()),
         fetch("/api/trades?limit=500").then((r) => r.json()),
         fetch("/api/bars?symbol=SPY&timeframe=1Day&limit=800").then((r) => r.json()),
+        fetch("/api/market").then((r) => r.json()).catch(() => null),
       ]);
       if (p.error) throw new Error(p.error);
       setAcct(p.account);
@@ -52,6 +54,7 @@ export default function PortfolioPage() {
       setHist(p.history ?? null);
       setTrades(t.trades ?? []);
       setSpy(b.bars ?? []);
+      if (m && !m.error) setSurface(m.surface ?? null);
       setErr(null);
     } catch (e: any) {
       setErr(String(e?.message ?? e));
@@ -131,8 +134,8 @@ export default function PortfolioPage() {
         <section className="border border-grid bg-panel/40 p-2">
           <div className="mb-1 flex items-baseline gap-3 px-1">
             <span className="text-[11px] tracking-[0.14em] text-cyan">PORTFOLIO vs SPY</span>
-            <span className="text-[10px] text-ours" style={{ color: "#FF4444" }}>— OURS</span>
-            <span className="text-[10px]" style={{ color: "#3B9EFF" }}>— SPY</span>
+            <span className="text-[10px] text-ours">— OURS</span>
+            <span className="text-[10px] text-spy">— SPY</span>
           </div>
           <EquityVsSpy times={times} ours={ours} spy={spyAligned} kind={kind} />
         </section>
@@ -153,9 +156,13 @@ export default function PortfolioPage() {
 
         <section className="border border-grid bg-panel/40 p-2">
           <div className="mb-1 px-1 text-[11px] tracking-[0.14em] text-cyan">
-            S&amp;P 500 REALIZED VOLATILITY <span className="text-label">· 21d annualized</span>
+            S&amp;P 500 VOLATILITY SURFACE{" "}
+            <span className="text-label">
+              · {surface?.symbols?.length ?? 0} names × {surface?.dates?.length ?? 0} sessions
+              · {surface?.window ?? 10}d realized, annualized
+            </span>
           </div>
-          <VolGraph times={spy.map((b) => b.t)} closes={spy.map((b) => b.c)} />
+          <VolSurface data={surface} height={300} />
         </section>
       </div>
 

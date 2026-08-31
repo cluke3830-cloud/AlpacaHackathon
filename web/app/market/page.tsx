@@ -1,143 +1,168 @@
 "use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import TabNav from "@/components/TabNav";
+import MarketChart from "@/components/MarketChart";
+import VixTermChart from "@/components/VixTermChart";
+import VixPulse from "@/components/VixPulse";
+import FragilityBadge from "@/components/FragilityBadge";
+import RegimeStack from "@/components/RegimeStack";
+import BacktestPanel from "@/components/BacktestPanel";
+import VolSurface, { type SurfaceData } from "@/components/VolSurface";
 import Plot from "@/components/Plot";
-import VolGraph from "@/components/VolGraph";
-import { LAYOUT, CONFIG, C } from "@/lib/plotTheme";
-import type { Bar } from "@/lib/alpaca";
+import { LAYOUT, CONFIG } from "@/lib/plotTheme";
+import { C } from "@/lib/theme";
+import { buildVixTermStructure } from "@/lib/vixTermStructure";
+import { regimeProbs, currentRegime } from "@/lib/hmmRegime";
+import { computeVixMeanRev } from "@/lib/vixMeanRev";
+import { computeMsarSignal } from "@/lib/msarRegime";
+import { readFragility, type FragilityRead } from "@/lib/gammaRegime";
+import { HISTORICAL_ELEVATED_RISK_DAYS, HISTORICAL_FIRE_DAYS,
+         HISTORICAL_STRONG_FIRE_DAYS } from "@/lib/historicalFragility";
+import { isoDay } from "@/lib/dateAxis";
+// Bar here is the OptionDashboard shape ({t: epoch seconds}), which the copied
+// market components and their isoDay/monthlyTicks helpers all assume.
+import type { Bar } from "@/lib/heikinashi";
 
 /**
- * MARKET — the same shape as OptionDashboard's market section (chart + regime
- * strip + a volatility panel), but sourced entirely from Alpaca.
+ * MARKET — a full port of OptionDashboard's market tab, re-sourced.
  *
- * ONE DELIBERATE DEVIATION, flagged rather than papered over: OptionDashboard's
- * VIX panels cannot be reproduced here. `^VIX` is not an Alpaca symbol, and
- * VIXY/VXX are decaying roll ETFs whose level is not a volatility reading --
- * substituting one would be the RV-for-IV anti-pattern this fund has an
- * explicit rule against. So the VIX *level* is shown as a number (fetched
- * server-side by the Python exporter, which can reach a real VIX source), and
- * the chart panel shows SPY REALIZED vol, labeled as realized.
+ * Same panels, same signals, same captions: SPY heikin-ashi with stress bands
+ * and crisis-onset dots, the SMA-vs-MSAR-vs-buy&hold signal backtest, VIX term
+ * structure, and the 3-state HMM vol-regime nowcast. The lib and component
+ * files are copied verbatim from that app rather than reimplemented, so the two
+ * terminals cannot drift apart in what they compute.
  *
- * In exchange this tab shows something OptionDashboard cannot: the live dealer
- * gamma profile the agent actually trades on, straight from Alpaca open
- * interest.
+ * WHAT CHANGED, and why: the data no longer comes from an EC2/IBKR relay.
+ *   SPY      -> Alpaca (the sponsor's own feed)
+ *   VIX/3M/9D-> CBOE's public daily archive (not on Alpaca at all; Yahoo has
+ *               stopped serving VIX3M/VIX9D history, verified before choosing)
+ *   dealer γ -> Alpaca open interest, via the agent's own signal exporter
+ * One panel is genuinely new: the S&P volatility surface, ported from
+ * Volatility_Surface.py.
+ *
+ * One honest downgrade, stated rather than hidden: VIX here is a DAILY close,
+ * not the relay's intraday tick. Panels label their as-of date accordingly.
  */
 
-const TFS = [
-  { k: "1Min", label: "1m" }, { k: "5Min", label: "5m" }, { k: "15Min", label: "15m" },
-  { k: "30Min", label: "30m" }, { k: "1Hour", label: "1h" }, { k: "4Hour", label: "4h" },
-  { k: "1Day", label: "1D" },
-] as const;
-const KINDS = ["candle", "ha", "line"] as const;
-type Kind = (typeof KINDS)[number];
+const WINDOWS: Record<string, number> = {
+  "3M": 63, "6M": 126, "1Y": 252, "2Y": 504, "5Y": 1260, "8Y": 2160,
+};
+const WINDOW_KEYS = ["3M", "6M", "1Y", "2Y", "5Y", "8Y"] as const;
 const POLL_MS = 60_000;
+// FIRE_VIX: the dot-gate tier (short gamma AND VIX >= 22). OptionDashboard also
+// carries a STRESS_VIX=20 tier, used only by its rolling net-GEX log merge --
+// dropped here rather than kept as an unused constant, since this app has no
+// such log yet (see riskDays below).
+const FIRE_VIX = 22;
 
 type Signal = {
-  generated: string; underlying: string; spot: number; vix: number; vix_asof: string;
-  gex: number; gex_sign: number; oi_date: string; n_contracts: number; cross_check: boolean;
+  generated: string; spot: number; vix: number; gex: number; gex_sign: number;
+  oi_date: string; n_contracts: number; cross_check: boolean;
   msar_long: boolean; p_high: number; p_slow: number; vol_era_threshold: number;
-  trend_ok: number; ret_t: number; mom20: number; ac_dir: number; gate: boolean;
-  sleeve1: string; sleeve2: string;
+  trend_ok: number; ac_dir: number; gate: boolean; sleeve1: string; sleeve2: string;
   gamma_profile: { strike: number; gex: number }[];
 };
 
-/** Heikin-Ashi, same definition the OptionDashboard chart uses. */
-function toHA(bars: Bar[]): Bar[] {
-  const out: Bar[] = [];
-  for (let i = 0; i < bars.length; i++) {
-    const b = bars[i];
-    const c = (b.o + b.h + b.l + b.c) / 4;
-    const o = i === 0 ? (b.o + b.c) / 2 : (out[i - 1].o + out[i - 1].c) / 2;
-    out.push({ t: b.t, o, h: Math.max(b.h, o, c), l: Math.min(b.l, o, c), c, v: b.v });
-  }
-  return out;
-}
+type MarketDoc = {
+  generated: string;
+  spy: Bar[]; vix: Bar[]; vix3m: Bar[]; vix9d: Bar[];
+  surface: SurfaceData;
+  sources: Record<string, string>;
+};
 
-function sma(v: number[], n: number): (number | null)[] {
-  const out: (number | null)[] = [];
-  let s = 0;
-  for (let i = 0; i < v.length; i++) {
-    s += v[i];
-    if (i >= n) s -= v[i - n];
-    out.push(i >= n - 1 ? s / n : null);
-  }
-  return out;
-}
-
-function Chip({ on, onClick, children }: { on: boolean; onClick: () => void; children: React.ReactNode }) {
+function ToggleChip({ label, on, onToggle, color }: {
+  label: string; on: boolean; onToggle: () => void; color: string;
+}) {
   return (
-    <button onClick={onClick}
-      className={`px-2 py-[2px] text-[10px] border transition-colors ${
-        on ? "border-cyan text-cyan" : "border-grid text-label hover:border-label"}`}>
-      {children}
+    <button onClick={onToggle} aria-pressed={on}
+      className={`flex items-center gap-1 px-2 py-0.5 text-[10px] border transition-colors ${
+        on ? "border-label text-label" : "border-grid text-dim hover:border-label"}`}>
+      <span className="inline-block h-2 w-2 rounded-full" style={{
+        backgroundColor: on ? color : "transparent", border: `1px solid ${on ? color : "#555"}` }} />
+      {label}
     </button>
   );
 }
 
-function Stat({ label, value, tone }: { label: string; value: string; tone?: string }) {
-  return (
-    <div className="border border-grid bg-panel/40 px-3 py-2">
-      <div className="text-[9px] tracking-[0.08em] text-label">{label}</div>
-      <div className="text-sm tabular-nums" style={tone ? { color: tone } : undefined}>{value}</div>
-    </div>
-  );
-}
-
 export default function MarketPage() {
-  const [tf, setTf] = useState<(typeof TFS)[number]["k"]>("1Day");
-  const [kind, setKind] = useState<Kind>("candle");
-  const [bars, setBars] = useState<Bar[]>([]);
-  const [daily, setDaily] = useState<Bar[]>([]);
+  const [win, setWin] = useState<string>("1Y");
+  const [showBands, setShowBands] = useState(true);
+  const [showDots, setShowDots] = useState(true);
+  const [showTiming, setShowTiming] = useState(true);
+  const [showMsar, setShowMsar] = useState(true);
+  const [doc, setDoc] = useState<MarketDoc | null>(null);
   const [sig, setSig] = useState<Signal | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const [b, d, s] = await Promise.all([
-        fetch(`/api/bars?symbol=SPY&timeframe=${tf}&limit=500`).then((r) => r.json()),
-        fetch("/api/bars?symbol=SPY&timeframe=1Day&limit=800").then((r) => r.json()),
+      const [m, s] = await Promise.all([
+        fetch("/api/market").then((r) => r.json()),
         fetch("/signal.json").then((r) => (r.ok ? r.json() : null)).catch(() => null),
       ]);
-      if (b.error) throw new Error(b.error);
-      setBars(b.bars ?? []);
-      setDaily(d.bars ?? []);
+      if (m.error) throw new Error(m.error);
+      setDoc(m);
       if (s) setSig(s);
-      setErr(null);
-    } catch (e: any) {
-      setErr(String(e?.message ?? e));
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "fetch failed");
     }
-  }, [tf]);
+  }, []);
 
   useEffect(() => {
-    load();
-    const id = setInterval(load, POLL_MS);
-    return () => clearInterval(id);
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const start = () => { if (!timer) timer = setInterval(load, POLL_MS); };
+    const stop = () => { if (timer) { clearInterval(timer); timer = null; } };
+    const onVis = () => { if (document.hidden) stop(); else { load(); start(); } };
+    if (!document.hidden) { load(); start(); }
+    document.addEventListener("visibilitychange", onVis);
+    return () => { stop(); document.removeEventListener("visibilitychange", onVis); };
   }, [load]);
 
-  const priceTraces = useMemo(() => {
-    if (!bars.length) return [];
-    const src = kind === "ha" ? toHA(bars) : bars;
-    const x = src.map((b) => b.t);
-    if (kind === "line") {
-      return [{ x, y: src.map((b) => b.c), type: "scatter", mode: "lines",
-                name: "SPY", line: { color: C.cyan, width: 1.6 } }];
+  const limit = WINDOWS[win];
+  // Displayed slice. Signals below are computed on FULL history and only then
+  // sliced — a timing signal re-seeded at the left edge of whatever window the
+  // user picked would misstate its own position.
+  const spy = useMemo(() => (doc?.spy ?? []).slice(-limit), [doc, limit]);
+  const vix = useMemo(() => (doc?.vix ?? []).slice(-limit), [doc, limit]);
+  const vix3m = useMemo(() => (doc?.vix3m ?? []).slice(-limit), [doc, limit]);
+  const vix9d = useMemo(() => (doc?.vix9d ?? []).slice(-limit), [doc, limit]);
+
+  const meanRev = useMemo(() => computeVixMeanRev(doc?.vix ?? []), [doc]);
+  const msar = useMemo(() => computeMsarSignal(doc?.vix ?? []), [doc]);
+  const term = buildVixTermStructure(vix, vix3m, vix9d);
+  const loading = !doc && !error;
+
+  const regimeNow = useMemo(
+    () => (vix.length >= 10 ? currentRegime(regimeProbs(vix.map((b) => b.c))) : null), [vix]);
+
+  const vixByDay = useMemo(
+    () => Object.fromEntries((doc?.vix ?? []).map((b) => [isoDay(b.t), b.c])) as Record<string, number>,
+    [doc]);
+
+  const latestVix = doc?.vix?.length ? doc.vix[doc.vix.length - 1].c : null;
+  const prevVix = doc?.vix && doc.vix.length > 1 ? doc.vix[doc.vix.length - 2].c : null;
+  const fragility: FragilityRead | null =
+    sig != null ? readFragility(sig.gex, latestVix) : null;
+
+  // Historical onset sets + today's live read. OptionDashboard also merges a
+  // rolling net-GEX log it has been accumulating; this app has no such log yet,
+  // so it uses the backtested history plus today rather than inventing one.
+  const riskDays = useMemo(() => {
+    const d = new Set<string>(HISTORICAL_ELEVATED_RISK_DAYS);
+    if (fragility?.elevatedRisk && spy.length) d.add(isoDay(spy[spy.length - 1].t));
+    return Array.from(d);
+  }, [fragility, spy]);
+
+  const fireDays = useMemo(() => {
+    const d = new Set<string>(HISTORICAL_FIRE_DAYS);
+    if (fragility?.regime === "trapdoor" && (latestVix ?? 0) >= FIRE_VIX && spy.length) {
+      d.add(isoDay(spy[spy.length - 1].t));
     }
-    const t: any[] = [{
-      x, open: src.map((b) => b.o), high: src.map((b) => b.h),
-      low: src.map((b) => b.l), close: src.map((b) => b.c),
-      type: "candlestick", name: kind === "ha" ? "SPY (HA)" : "SPY",
-      increasing: { line: { color: C.pos }, fillcolor: C.pos },
-      decreasing: { line: { color: C.neg }, fillcolor: C.neg },
-    }];
-    const closes = src.map((b) => b.c);
-    for (const [n, col] of [[20, C.gold], [50, "#3B9EFF"]] as const) {
-      if (closes.length > n) {
-        t.push({ x, y: sma(closes, n), type: "scatter", mode: "lines",
-                 name: `SMA${n}`, line: { color: col, width: 1 } });
-      }
-    }
-    return t;
-  }, [bars, kind]);
+    return Array.from(d);
+  }, [fragility, latestVix, spy]);
+
+  const strongDays = useMemo(() => Array.from(new Set(HISTORICAL_STRONG_FIRE_DAYS)), []);
 
   const gammaTrace = useMemo(() => {
     if (!sig?.gamma_profile?.length) return null;
@@ -151,91 +176,195 @@ export default function MarketPage() {
   }, [sig]);
 
   return (
-    <main className="min-h-screen">
+    <main className="min-h-screen bg-bg">
       <TabNav active="/market" />
 
-      {err && (
-        <div className="mx-4 mt-3 border border-neg/60 bg-neg/10 px-3 py-2 text-xs text-neg">{err}</div>
-      )}
+      <div className="flex flex-wrap items-center gap-3 border-b border-headerline
+        bg-gradient-to-r from-[#0A1628] to-[#051020] px-4 py-2">
+        <span className="text-xs tracking-[0.08em] text-label">MARKET · REGIME</span>
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] uppercase tracking-[0.06em] text-label">Lookback</span>
+          <nav className="flex gap-1">
+            {WINDOW_KEYS.map((k) => (
+              <button key={k} onClick={() => setWin(k)}
+                className={`px-2 py-0.5 text-xs border ${k === win
+                  ? "border-cyan text-cyan" : "border-grid text-label hover:border-label"}`}>
+                {k}
+              </button>
+            ))}
+          </nav>
+        </div>
+        <div className="ml-auto flex items-center gap-4">
+          {error && <span className="text-xs text-neg">data error: {error}</span>}
+          <FragilityBadge read={fragility} />
+          <VixPulse vix={latestVix} prev={prevVix}
+            asOf={doc?.vix?.length ? isoDay(doc.vix[doc.vix.length - 1].t) : undefined} />
+        </div>
+      </div>
 
+      {/* ---- live agent state: what this terminal is actually trading ---- */}
       {sig && (
-        <div className="grid grid-cols-2 gap-2 px-4 py-3 md:grid-cols-4 lg:grid-cols-7">
-          <Stat label="SPOT" value={`$${sig.spot.toFixed(2)}`} />
-          <Stat label="VIX" value={sig.vix.toFixed(2)} tone={sig.vix > 20 ? C.neg : undefined} />
-          <Stat label="DEALER GEX" value={`${(sig.gex / 1e9).toFixed(3)} $bn`}
-                tone={sig.gex_sign > 0 ? C.pos : C.neg} />
-          <Stat label="MSAR REGIME" value={sig.msar_long ? "RISK-ON" : "RISK-OFF"}
-                tone={sig.msar_long ? C.pos : C.neg} />
-          <Stat label="p_slow" value={`${sig.p_slow.toFixed(3)} / ${sig.vol_era_threshold}`}
-                tone={sig.p_slow >= sig.vol_era_threshold ? C.neg : undefined} />
-          <Stat label="SLEEVE 1" value={sig.sleeve1} tone={sig.gate ? C.pos : C.label} />
-          <Stat label="SLEEVE 2" value={sig.sleeve2}
-                tone={sig.ac_dir > 0 ? C.pos : sig.ac_dir < 0 ? C.neg : C.label} />
-        </div>
+        <section className="m-2 border border-grid">
+          <div className="px-3 pt-2 text-[10px] uppercase tracking-[0.06em] text-label">
+            Live agent state — two-sleeve options book · Δ0.70 · 7DTE
+            <span className="text-dim"> — dealer γ from Alpaca open interest
+              ({sig.n_contracts} contracts, OI {sig.oi_date}
+              {sig.cross_check ? ", cross-check OK" : ", ⚠ CROSS-CHECK MISMATCH"})</span>
+          </div>
+          <div className="grid grid-cols-2 gap-px bg-grid p-px md:grid-cols-4 lg:grid-cols-7">
+            {[
+              ["SPOT", `$${sig.spot.toFixed(2)}`, undefined],
+              ["DEALER GEX", `${(sig.gex / 1e9).toFixed(3)} $bn`, sig.gex_sign > 0 ? C.pos : C.neg],
+              ["MSAR", sig.msar_long ? "RISK-ON" : "RISK-OFF", sig.msar_long ? C.pos : C.neg],
+              ["p_slow", `${sig.p_slow.toFixed(3)} / ${sig.vol_era_threshold}`,
+                sig.p_slow >= sig.vol_era_threshold ? C.neg : undefined],
+              ["TREND VETO", sig.trend_ok > 0 ? "PASS" : "BLOCK", sig.trend_ok > 0 ? C.pos : C.neg],
+              ["SLEEVE 1", sig.sleeve1, sig.gate ? C.pos : C.label],
+              ["SLEEVE 2", sig.sleeve2, sig.ac_dir > 0 ? C.pos : sig.ac_dir < 0 ? C.neg : C.label],
+            ].map(([label, value, tone]) => (
+              <div key={label as string} className="bg-bg px-3 py-2">
+                <div className="text-[9px] tracking-[0.08em] text-label">{label}</div>
+                <div className="text-sm tabular-nums"
+                     style={tone ? { color: tone as string } : undefined}>{value}</div>
+              </div>
+            ))}
+          </div>
+        </section>
       )}
 
-      <div className="flex flex-wrap items-center gap-3 px-4 pb-2">
-        <div className="flex gap-1">
-          {TFS.map((t) => <Chip key={t.k} on={t.k === tf} onClick={() => setTf(t.k)}>{t.label}</Chip>)}
+      {/* ---- SPY chart with regime overlays ---- */}
+      <section className="m-2 border border-grid">
+        <div className="px-3 pt-2 text-[10px] uppercase tracking-[0.06em] text-label">
+          S&amp;P 500 (SPY) — daily heikin-ashi · <span style={{ color: C.red2 }}>red = VIX ≥ 25 (acute)</span>
+          {" · "}<span style={{ color: "#FFB000" }}>amber = elevated risk (short γ + VIX ≥ 20)</span>
+          {" · "}dots = firings (short γ + VIX ≥ 22, 20d window): <span style={{ color: C.neg }}>★ CRISIS ≥10%</span>
+          {" "}<span style={{ color: C.gold }}>◆ dip ≥5%</span>
+          {" "}<span className="text-dim">✕ miss</span>{" "}
+          <span style={{ color: C.cyan }}>◇ pending (live)</span>
+          <span className="text-dim"> — crisis lift 2.2× base; 6/7 crises since 2018 had the gate lit
+          before the −10% breach. Still 91% of fires see no crisis — a risk gauge, not a forecast</span>
         </div>
-        <div className="flex gap-1">
-          {KINDS.map((k) => <Chip key={k} on={k === kind} onClick={() => setKind(k)}>{k.toUpperCase()}</Chip>)}
-        </div>
-        {sig && (
-          <span className="ml-auto text-[10px] text-label">
-            OI {sig.oi_date} · {sig.n_contracts} contracts ·{" "}
-            {sig.cross_check ? "cross-check OK" : "CROSS-CHECK MISMATCH"}
-          </span>
-        )}
-      </div>
-
-      <div className="grid gap-3 px-4 pb-4 lg:grid-cols-[1fr_320px]">
-        <section className="border border-grid bg-panel/40 p-2">
-          <div className="px-1 pb-1 text-[11px] tracking-[0.14em] text-cyan">SPY</div>
-          {bars.length ? (
-            <Plot data={priceTraces}
-              layout={{ ...LAYOUT, height: 420, xaxis: { ...LAYOUT.xaxis, rangeslider: { visible: false } } }}
-              config={CONFIG} style={{ width: "100%" }} />
-          ) : (
-            <div className="flex h-[420px] items-center justify-center text-xs text-label">loading bars…</div>
-          )}
-        </section>
-
-        <section className="border border-grid bg-panel/40 p-2">
-          <div className="px-1 pb-1 text-[11px] tracking-[0.14em] text-cyan">
-            DEALER GAMMA PROFILE <span className="text-label">· per strike</span>
-          </div>
-          {gammaTrace ? (
-            <Plot data={gammaTrace}
-              layout={{ ...LAYOUT, height: 420, showlegend: false,
-                margin: { l: 52, r: 10, t: 10, b: 34 },
-                xaxis: { ...LAYOUT.xaxis, title: { text: "$bn", font: { size: 9, color: C.label } } },
-                yaxis: { ...LAYOUT.yaxis, title: { text: "STRIKE", font: { size: 9, color: C.label } } },
-                shapes: sig ? [{ type: "line", xref: "paper", x0: 0, x1: 1,
-                                 y0: sig.spot, y1: sig.spot,
-                                 line: { color: C.gold, width: 1, dash: "dot" } }] : [] }}
-              config={CONFIG} style={{ width: "100%" }} />
-          ) : (
-            <div className="flex h-[420px] items-center justify-center px-4 text-center text-xs text-label">
-              no signal.json — run
-              <br />
-              <code className="text-body">export_signal_json.py</code>
-            </div>
-          )}
-        </section>
-      </div>
-
-      <div className="px-4 pb-8">
-        <section className="border border-grid bg-panel/40 p-2">
-          <div className="px-1 pb-1 text-[11px] tracking-[0.14em] text-cyan">
-            S&amp;P 500 REALIZED VOLATILITY
-            <span className="ml-2 text-label">
-              · 21d annualized · realized, not implied (VIX is not an Alpaca symbol)
+        <div className="px-3 pb-1 text-[10px] uppercase tracking-[0.06em] text-label">
+          Risk-managed timing — two independent causal signals:
+          {" "}<span style={{ color: C.pos }}>▲</span><span style={{ color: C.neg }}>▼ SMA</span>
+          {" "}(VIX vs 1.5×/1.0× of its 252d mean)
+          {" · "}<span style={{ color: C.cyan }}>▲</span><span style={{ color: "#FF9500" }}>▼ MSAR</span>
+          {" "}(2-regime Markov-switching AR filter on vol-of-vol)
+          {meanRev.ready && (
+            <span className="font-bold" style={{ color: meanRev.position === "long" ? C.pos : "#FFB000" }}>
+              {" "}· SMA NOW: {meanRev.position === "long" ? "LONG" : "FLAT"}
             </span>
+          )}
+          {msar.ready && msar.pHigh != null && (
+            <span className="font-bold" style={{ color: msar.position === "long" ? C.cyan : "#FF9500" }}>
+              {" "}· MSAR NOW: {msar.position === "long" ? "LONG" : "FLAT"} (P
+              {(100 * msar.pHigh).toFixed(0)}%)
+            </span>
+          )}
+          <span className="text-dim"> — drawdown-defense overlays, not oracles.</span>
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5 px-3 py-1.5">
+          <span className="mr-0.5 text-[9px] uppercase tracking-[0.08em] text-dim">show</span>
+          <ToggleChip label="Stress bands" on={showBands} onToggle={() => setShowBands((v) => !v)} color="#FFB000" />
+          <ToggleChip label="Crisis dots" on={showDots} onToggle={() => setShowDots((v) => !v)} color={C.neg} />
+          <ToggleChip label="SMA timing" on={showTiming} onToggle={() => setShowTiming((v) => !v)} color={C.pos} />
+          <ToggleChip label="MSAR timing" on={showMsar} onToggle={() => setShowMsar((v) => !v)} color="#FF9500" />
+        </div>
+        <MarketChart bars={spy}
+          vixByDay={showBands ? vixByDay : undefined}
+          riskDays={showBands ? riskDays : undefined}
+          fireDays={showDots ? fireDays : undefined}
+          strongDays={showDots ? strongDays : undefined}
+          buyDays={showTiming ? meanRev.buyDays : undefined}
+          sellDays={showTiming ? meanRev.sellDays : undefined}
+          msarBuyDays={showMsar ? msar.buyDays : undefined}
+          msarSellDays={showMsar ? msar.sellDays : undefined}
+          loading={loading} />
+      </section>
+
+      {/* ---- signal backtest ---- */}
+      <section className="m-2 border border-grid">
+        <div className="px-3 pt-2 text-[10px] uppercase tracking-[0.06em] text-label">
+          Signal backtest — SMA vs MSAR vs buy &amp; hold, full available history (independent of the
+          lookback selector above — a timing signal&apos;s record isn&apos;t meaningful sliced to 3 months)
+          <span className="text-dim"> — client-side, frictionless (no cost model); the BACKTESTED tab
+          carries the audited, cost-charged numbers and is the source of truth</span>
+        </div>
+        <BacktestPanel bars={doc?.spy ?? []}
+          smaBuyDays={meanRev.buyDays} smaSellDays={meanRev.sellDays}
+          msarBuyDays={msar.buyDays} msarSellDays={msar.sellDays}
+          loading={loading} />
+      </section>
+
+      {/* ---- dealer gamma profile ---- */}
+      <section className="m-2 border border-grid">
+        <div className="px-3 pt-2 text-[10px] uppercase tracking-[0.06em] text-label">
+          Dealer gamma profile — per strike, from Alpaca open interest ·{" "}
+          <span style={{ color: C.pos }}>green = long γ (pinning)</span> ·{" "}
+          <span style={{ color: C.neg }}>red = short γ (amplifying)</span>
+          <span className="text-dim"> — gold dashed line = spot. This is the surface sleeve 2
+          reads its direction from</span>
+        </div>
+        {gammaTrace ? (
+          <Plot data={gammaTrace}
+            layout={{ ...LAYOUT, height: 340, showlegend: false,
+              margin: { l: 58, r: 16, t: 10, b: 34 },
+              xaxis: { ...LAYOUT.xaxis, title: { text: "$bn", font: { size: 9, color: C.label } } },
+              yaxis: { ...LAYOUT.yaxis, title: { text: "STRIKE", font: { size: 9, color: C.label } } },
+              shapes: sig ? [{ type: "line", xref: "paper", x0: 0, x1: 1,
+                               y0: sig.spot, y1: sig.spot,
+                               line: { color: C.gold, width: 1, dash: "dot" } }] : [] }}
+            config={CONFIG} style={{ width: "100%" }} />
+        ) : (
+          <div className="flex h-[340px] items-center justify-center text-xs text-label">
+            no signal.json — run <code className="ml-1 text-body">export_signal_json.py</code>
           </div>
-          <VolGraph times={daily.map((b) => b.t)} closes={daily.map((b) => b.c)} height={220} />
-        </section>
-      </div>
+        )}
+      </section>
+
+      {/* ---- VIX term structure ---- */}
+      <section className="m-2 border border-grid">
+        <div className="px-3 pt-2 text-[10px] uppercase tracking-[0.06em] text-label">
+          VIX term structure (VIX9D · VIX · VIX3M) — red band = backwardation (VIX3M &lt; VIX).
+          Watch VIX9D cross up through VIX for the earliest stress tell.
+          <span className="text-dim"> — CBOE daily closes</span>
+        </div>
+        <VixTermChart data={term} loading={loading} />
+      </section>
+
+      {/* ---- HMM vol regime ---- */}
+      <section className="m-2 border border-grid">
+        <div className="px-3 pt-2 text-[10px] uppercase tracking-[0.06em] text-label">
+          Vol regime nowcast — 3-state HMM on VIX, filtered (causal), live ·{" "}
+          <span style={{ color: C.pos }}>calm ≈12.8</span> ·{" "}
+          <span style={{ color: C.text }}>neutral ≈17.2</span> ·{" "}
+          <span style={{ color: C.neg }}>volatile ≈25.7</span>
+          {regimeNow && (
+            <span className="font-bold" style={{ color:
+              regimeNow.state === "calm" ? C.pos
+              : regimeNow.state === "volatile" ? C.neg : C.text }}>
+              {" "}· NOW: {regimeNow.state.toUpperCase()} {(100 * regimeNow.p).toFixed(0)}%
+            </span>
+          )}
+          <span className="text-dim"> — context (where we are), not a forecast</span>
+        </div>
+        <RegimeStack vixBars={vix} loading={loading} />
+      </section>
+
+      {/* ---- S&P volatility surface ---- */}
+      <section className="m-2 mb-6 border border-grid">
+        <div className="px-3 pt-2 text-[10px] uppercase tracking-[0.06em] text-label">
+          S&amp;P 500 volatility surface — {doc?.surface?.symbols?.length ?? 0} names ×{" "}
+          {doc?.surface?.dates?.length ?? 0} sessions · {doc?.surface?.window ?? 10}d rolling
+          realized vol, annualized
+          <span className="text-dim"> — port of Volatility_Surface.py, widened from a 15-name tech
+          basket to a sector-spread cross-section so the dispersion is visible rather than one
+          correlated ridge</span>
+        </div>
+        <div className="p-2">
+          <VolSurface data={doc?.surface ?? null} />
+        </div>
+      </section>
     </main>
   );
 }
