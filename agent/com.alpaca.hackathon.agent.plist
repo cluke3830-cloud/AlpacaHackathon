@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.alpaca.hackathon.agent</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>/Users/lukecha/Library/Mobile Documents/com~apple~CloudDocs/Trading Folder/AlpacaHackathon/agent/daily_close_job.sh</string>
+  </array>
+  <!-- 15:45 America/New_York == 15 min before the 16:00 close; launchd uses the
+       Mac's local clock, which is ET on this machine. Mon-Fri; the agent's own
+       exchange-calendar gate handles holidays. launchd (not cron) because it
+       RUNS MISSED JOBS ON WAKE if the lid was closed at 15:45. -->
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>45</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>45</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>45</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>45</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>45</integer></dict>
+  </array>
+  <key>StandardOutPath</key><string>/tmp/alpaca_agent_launchd.log</string>
+  <key>StandardErrorPath</key><string>/tmp/alpaca_agent_launchd.log</string>
+</dict>
+</plist>
