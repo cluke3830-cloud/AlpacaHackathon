@@ -174,23 +174,34 @@ def build_surface() -> dict:
     )
 
 
-def build_option_timing() -> dict:
-    """OUR AGENT's historical trading timing, for the SPY chart's marker rows.
+def build_option_agent() -> tuple[dict, dict]:
+    """OUR AGENT's historical timing markers AND its real backtest curve, from
+    ONE signal computation.
 
-    Same construction the audit stack validated (SPX dealer gamma at gex_lag=1,
-    the shipping-honest config), reusing gex_source_check.signals_from_gex
-    rather than re-deriving the gate here -- a hand-rolled copy is exactly how a
-    chart ends up showing a signal the agent doesn't actually trade.
+    Both blocks reuse gex_source_check.signals_from_gex on the shipping-honest
+    config (SPX dealer gamma, gex_lag=1) rather than re-deriving anything here
+    -- a hand-rolled copy is exactly how a chart ends up showing a signal the
+    agent doesn't actually trade.
 
-      calls_on  / calls_off : sleeve-1 T2 gate opens (buy deep-ITM calls) / closes
-      puts_on   / puts_off  : sleeve-2 A+C direction enters / leaves bearish
+    THE BACKTEST BLOCK IS THE REAL OPTION BOOK, NOT A TIMING OVERLAY: deep-ITM
+    SPX calls/puts at real bid/ask via option_sleeves.backtest_directional,
+    marketable-limit fill (cost_frac=0.5), both sleeves blended at w=0.55 --
+    and at 1.0x leverage, deliberately NOT the competition's 4x. The panel it
+    feeds compares SIGNAL QUALITY against frictionless SPY overlays; levering
+    our line 4x would win that chart by construction and prove nothing. Note
+    the asymmetry runs the honest direction: ours is the only cost-charged
+    line on the panel.
 
-    Coverage note carried into the JSON: the chain history ends 2026-06-12, so
-    markers stop there. The LIVE read continues in the signal strip above the
-    chart (signal.json, recomputed from Alpaca each run) -- stated in the UI
-    caption rather than letting the marker gap look like the agent went quiet."""
+      calls_on / calls_off : sleeve-1 T2 gate opens (buy deep-ITM calls) / closes
+      puts_on  / puts_off  : sleeve-2 A+C direction enters / leaves bearish
+
+    Coverage note carried into the JSON: chain history ends 2026-06-12, so both
+    markers and the curve stop there. The LIVE read continues in the signal
+    strip (signal.json, recomputed from Alpaca each run) -- stated in the UI
+    caption rather than letting the gap look like the agent went quiet."""
     sys.path.insert(0, str(HERE.parents[1] / "Researched_Concepts" / "CrossSectionalArb" / "src"))
     from gex_source_check import gex_from, signals_from_gex, GEX_DATA
+    from option_sleeves import load_chain, backtest_directional, risk_blend, stats as ostats
 
     g = pd.concat([gex_from(GEX_DATA / "chains_SPX_pre2022.parquet"),
                    gex_from(GEX_DATA / "chains_SPX.parquet")]).groupby(level=0).sum()
@@ -209,7 +220,32 @@ def build_option_timing() -> dict:
     )
     print(f"  option timing: {len(timing['calls_on'])} call entries, "
           f"{len(timing['puts_on'])} put entries, through {timing['coverage_end']}")
-    return timing
+
+    chain = load_chain("SPX")
+    by_date = {d: grp for d, grp in chain.groupby(level=0)}
+    idx = sig.index.intersection(chain.index.unique()).sort_values()
+    sigx = sig.loc[idx]
+    kw = dict(chain=chain, by_date=by_date, cost_frac=0.5,
+              target_delta=0.70, target_dte=7, flip_policy="immediate")
+    r1 = backtest_directional(sigx["gate"], **kw)
+    r2 = backtest_directional(sigx["ac_dir"], **kw)
+    bl = risk_blend(r1["ret"], r2["ret"], 0.55)          # 1.0x on purpose, see above
+    eq = (1 + bl).cumprod()
+    st = ostats(bl)
+    backtest = dict(
+        times=[d.strftime("%Y-%m-%d") for d in eq.index],
+        equity=[round(float(x), 6) for x in eq],
+        in_market=[int(v != 0) for v in bl],
+        stats=dict(cagr=round(float(st["cagr"]), 6), sharpe=round(float(st["sharpe"]), 4),
+                   maxdd=round(float(st["maxdd"]), 6)),
+        leverage=1.0,
+        fill="marketable-limit (half spread)",
+        config="two-sleeve options book · SPX Δ0.70 7DTE · cost-charged · 1.0x",
+        coverage_end=str(eq.index.max().date()),
+    )
+    print(f"  option backtest: {len(eq)}d  Sharpe {st['sharpe']:+.2f}  "
+          f"CAGR {100*st['cagr']:+.1f}%  DD {100*st['maxdd']:.1f}%  (1.0x, half-spread)")
+    return timing, backtest
 
 
 def main():
@@ -219,8 +255,8 @@ def main():
     spy = fetch_spy_daily()
     print("=== S&P volatility surface (Alpaca) ===")
     surface = build_surface()
-    print("=== option trading timing (our agent, historical) ===")
-    timing = build_option_timing()
+    print("=== option agent: timing + real backtest (historical) ===")
+    timing, opt_bt = build_option_agent()
 
     # `t` is EPOCH SECONDS, not an ISO string. The market tab's components are
     # copied verbatim from OptionDashboard, whose Bar type is {t:number,...} and
@@ -242,6 +278,7 @@ def main():
         vix=ser(vix["VIX"]), vix3m=ser(vix["VIX3M"]), vix9d=ser(vix["VIX9D"]),
         surface=surface,
         option_timing=timing,
+        option_backtest=opt_bt,
         sources=dict(
             spy="Alpaca IEX daily",
             vix="CBOE public daily archive — not available on Alpaca",

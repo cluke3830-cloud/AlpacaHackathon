@@ -73,6 +73,11 @@ type MarketDoc = {
     puts_on: string[]; puts_off: string[];
     coverage_start: string; coverage_end: string; config: string;
   };
+  option_backtest?: {
+    times: string[]; equity: number[]; in_market: number[];
+    stats: { cagr: number; sharpe: number; maxdd: number };
+    leverage: number; fill: string; config: string; coverage_end: string;
+  };
   sources: Record<string, string>;
 };
 
@@ -301,14 +306,21 @@ export default function MarketPage() {
       {/* ---- signal backtest ---- */}
       <section className="m-2 border border-grid">
         <div className="px-3 pt-2 text-[10px] uppercase tracking-[0.06em] text-label">
-          Signal backtest — SMA vs MSAR vs buy &amp; hold, full available history (independent of the
-          lookback selector above — a timing signal&apos;s record isn&apos;t meaningful sliced to 3 months)
-          <span className="text-dim"> — client-side, frictionless (no cost model); the BACKTESTED tab
-          carries the audited, cost-charged numbers and is the source of truth</span>
+          Signal backtest — SMA vs MSAR vs buy &amp; hold vs{" "}
+          <span style={{ color: C.gold }}>OUR OPTION BOOK</span>, full available history
+          (independent of the lookback selector above — a timing signal&apos;s record isn&apos;t
+          meaningful sliced to 3 months)
+          <span className="text-dim"> — SMA/MSAR/B&amp;H are client-side and frictionless (no cost
+          model); ours is the REAL two-sleeve options backtest, cost-charged at real bid/ask,
+          shown at 1.0x on purpose — this panel compares signal quality, and levering our line 4x
+          would win the chart by construction while proving nothing. Curve ends
+          {" "}{doc?.option_backtest?.coverage_end ?? "at chain-history end"}; the BACKTESTED tab
+          carries the audited numbers and is the source of truth</span>
         </div>
         <BacktestPanel bars={doc?.spy ?? []}
           smaBuyDays={meanRev.buyDays} smaSellDays={meanRev.sellDays}
           msarBuyDays={msar.buyDays} msarSellDays={msar.sellDays}
+          optionCurve={doc?.option_backtest ?? null}
           loading={loading} />
       </section>
 
