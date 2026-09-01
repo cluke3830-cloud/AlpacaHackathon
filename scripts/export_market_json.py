@@ -199,9 +199,28 @@ def build_option_agent() -> tuple[dict, dict]:
     markers and the curve stop there. The LIVE read continues in the signal
     strip (signal.json, recomputed from Alpaca each run) -- stated in the UI
     caption rather than letting the gap look like the agent went quiet."""
-    sys.path.insert(0, str(HERE.parents[1] / "Researched_Concepts" / "CrossSectionalArb" / "src"))
-    from gex_source_check import gex_from, signals_from_gex, GEX_DATA
-    from option_sleeves import load_chain, backtest_directional, risk_blend, stats as ostats
+    # These two blocks are HISTORICAL: chain data ends 2026-06-12, so their
+    # content is static. Only the research monorepo (multi-GB chain parquets)
+    # can recompute them; the standalone runner cannot and should not -- it
+    # CARRIES THE BLOCKS FORWARD from the market.json this repo already ships.
+    # Nightly recomputation of static history was waste even in the monorepo;
+    # here it is honestly impossible, and the fallback says which it did.
+    try:
+        sys.path.insert(0, str(HERE.parents[1] / "Researched_Concepts" / "CrossSectionalArb" / "src"))
+        from gex_source_check import gex_from, signals_from_gex, GEX_DATA
+        from option_sleeves import load_chain, backtest_directional, risk_blend, stats as ostats
+    except ImportError as e:
+        if OUT.exists():
+            prev = json.loads(OUT.read_text())
+            if "option_timing" in prev and "option_backtest" in prev:
+                print(f"  research stack unavailable ({e}) -> carrying forward the "
+                      f"static historical blocks from the shipped market.json "
+                      f"(coverage through {prev['option_timing']['coverage_end']})")
+                return prev["option_timing"], prev["option_backtest"]
+        raise RuntimeError(
+            "research stack unavailable AND no previous market.json to carry "
+            "forward -- refusing to ship a market.json with the agent's own "
+            "history silently missing") from e
 
     g = pd.concat([gex_from(GEX_DATA / "chains_SPX_pre2022.parquet"),
                    gex_from(GEX_DATA / "chains_SPX.parquet")]).groupby(level=0).sum()
