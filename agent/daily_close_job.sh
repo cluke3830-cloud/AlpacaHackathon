@@ -21,17 +21,20 @@
 
 set -uo pipefail
 DIR="${0:A:h}"
+# ABSOLUTE interpreter: launchd's PATH is the bare system one, where `python3`
+# is Apple's interpreter without alpaca-py. This bit during the runner move.
+PY="/opt/miniconda3/bin/python3"
 LOG="$DIR/logs/agent_$(date +%Y%m%d).log"
 mkdir -p "$DIR/logs"
 
 {
   echo "================ $(date '+%Y-%m-%d %H:%M:%S %Z') ================"
   cd "$DIR"
-  AGENT_DRY_RUN=false python3 -u run_agent.py
+  AGENT_DRY_RUN=false "$PY" -u run_agent.py
   rc=$?
   echo "--- agent exit: $rc ---"
   cd "$DIR/.."
-  python3 -u scripts/export_signal_json.py && echo "--- signal.json refreshed ---"
-  python3 -u scripts/export_market_json.py && echo "--- market.json refreshed ---"
+  "$PY" -u scripts/export_signal_json.py && echo "--- signal.json refreshed ---"
+  "$PY" -u scripts/export_market_json.py && echo "--- market.json refreshed ---"
   echo "================ done $(date '+%H:%M:%S') ================"
 } >> "$LOG" 2>&1

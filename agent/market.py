@@ -17,6 +17,10 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(ROOT / "mandatory_tests_for_deployment_2"))
 sys.path.insert(0, str(ROOT / "U.S._gamma_strategy" / "Reflexive_0DTE_Research"))
+# vendor/ is APPENDED (not inserted) so it is a FALLBACK: inside the monorepo
+# the live research modules above win; a standalone clone (the production
+# runner outside iCloud, or a judge's checkout) resolves here instead.
+sys.path.append(str(Path(__file__).resolve().parents[1] / "vendor"))
 
 from alpaca_keys import API_KEY, SECRET_KEY          # noqa: E402
 from alpaca.trading.client import TradingClient       # noqa: E402

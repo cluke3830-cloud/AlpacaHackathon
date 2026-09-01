@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "mandatory_tests_for_deployment_2"))
 sys.path.insert(0, str(ROOT / "KoreanStatArb" / "scripts"))
+sys.path.append(str(Path(__file__).resolve().parents[1] / "vendor"))  # standalone fallback
 
 import config as C                                      # noqa: E402
 import market                                           # noqa: E402
