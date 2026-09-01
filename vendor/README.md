@@ -16,8 +16,12 @@ If a signal module changes upstream, re-copy it here in the same commit —
 the agent's test_parity.py (run in the monorepo) is what certifies the pair.
 
   or_smh_signal.py        MSAR filter + A+C direction + OR gate (certified)
+  gamma_ac_engine.py      the A/C formulas or_smh_signal imports ("single
+                          source"); dependency-free (stdlib + numpy), so it
+                          vendors whole — no extract needed
   t2_qld_signal.py        T2 gate: vol-era veto + 200d trend veto (certified)
   config/msar2_params.json  MSAR parameters read by or_smh_signal at call time
-  us_bear_lab.py          only R, Q, iv_vec are used by the agent; the
-                          chain-reading functions in this file are never
-                          called live and their parquets are NOT vendored
+  us_bear_lab.py          MINIMAL EXTRACT (R, Q, iv_vec only) — the full
+                          module imports bear_strategy_lab and the research
+                          web behind it, which the standalone-clone test
+                          caught immediately; see that file's header

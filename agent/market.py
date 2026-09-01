@@ -193,9 +193,21 @@ def market_open_now() -> tuple[bool, str]:
         import exchange_calendars as xcals
         cal = xcals.get_calendar(C.CALENDAR)
         now = pd.Timestamp.now(tz="UTC")
-        if not cal.is_session(now.tz_convert("America/New_York").normalize().tz_localize(None)):
+        session = now.tz_convert("America/New_York").normalize().tz_localize(None)
+        if not cal.is_session(session):
             return False, "not an exchange session (holiday/weekend)"
-        close = cal.session_close(now.tz_convert("America/New_York").normalize().tz_localize(None))
+        close = cal.session_close(session)
+        # BOTH bounds. The original check was only `now < close`, which let a
+        # pre-market invocation (e.g. a manual launchctl kickstart at 8am)
+        # proceed and trade on an overnight signal -- violating the
+        # decide-at-close convention every backtest number assumes. Found
+        # during the runner migration's morning test, before it could bite.
+        try:
+            opn = cal.session_open(session)
+        except AttributeError:              # newer exchange_calendars renamed it
+            opn = cal.session_first_minute(session)
+        if now < opn:
+            return False, f"session not open yet (opens {opn})"
         if now >= close:
             return False, f"session already closed at {close}"
         return True, f"session open, close {close}"
